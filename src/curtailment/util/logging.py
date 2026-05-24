@@ -26,7 +26,7 @@ def _setup_structlog(level: str, fmt: str, log_file: str | None) -> None:
     import structlog
 
     if fmt == "json":
-        renderer: structlog.dev.ConsoleRenderer | structlog.dev.JsonRenderer = structlog.dev.JsonRenderer()
+        renderer = structlog.processors.JSONRenderer()
     else:
         renderer = structlog.dev.ConsoleRenderer()
 

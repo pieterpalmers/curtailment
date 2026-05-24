@@ -1,0 +1,13 @@
+[Unit]
+Description=Solar Curtailment Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=curtailment
+ExecStart=/usr/bin/python -m curtailment --config /etc/curtailment/config.yaml
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

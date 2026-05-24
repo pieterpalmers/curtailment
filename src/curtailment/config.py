@@ -21,7 +21,7 @@ class GrowattConfig:
 
 
 @dataclass
-class APsystemsConfig:
+class APSystemsConfig:
     host: str
     ecu_port: int = 1503
 
@@ -68,7 +68,7 @@ class LoggingConfig:
 @dataclass
 class Config:
     growatt: GrowattConfig
-    apsystems: APsystemsConfig
+    apsystems: APSystemsConfig
     evcc: EvccConfig
     control: ControlConfig
     tariff: TariffConfig
@@ -119,9 +119,9 @@ def _parse_growatt(raw: dict[str, Any]) -> GrowattConfig:
     )
 
 
-def _parse_apsystems(raw: dict[str, Any]) -> APsystemsConfig:
+def _parse_apsystems(raw: dict[str, Any]) -> APSystemsConfig:
     _require(raw, "host", "apsystems.host")
-    return APsystemsConfig(
+    return APSystemsConfig(
         host=raw["host"],
         ecu_port=raw.get("ecu_port", 1503),
     )
