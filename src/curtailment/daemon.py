@@ -64,6 +64,7 @@ class Daemon:
     def _run_cycle(self) -> None:
         """Execute one control cycle."""
         from .state import Action, WorldState, decide_action
+        logger.info("Running control cycle...")
 
         cycle_start = time.monotonic()
         time_in_state = cycle_start - self._state_start

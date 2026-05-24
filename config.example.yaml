@@ -16,8 +16,8 @@ evcc:
 
 control:
   period_seconds: 30
-  sample_count: 6
-  sample_interval_seconds: 5
+  sample_count: 2
+  sample_interval_seconds: 1
 
   export_setpoint_watts: -200
   deadband_watts: 100

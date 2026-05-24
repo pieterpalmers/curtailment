@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -9,6 +10,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .config import Config
+
+logger = logging.getLogger("curtailment")
 
 
 class State(Enum):
@@ -51,15 +54,26 @@ def reconcile_startup(world: WorldState, cfg: Config) -> State:
     """Determine state from external system state. No history needed."""
     tariff_cfg = cfg.tariff
 
+    logger.info(
+        "startup reconcile: injection_tariff=%.4f enter_threshold=%.4f "
+        "growatt_export_limit_active=%s",
+        world.injection_tariff, tariff_cfg.enter_threshold,
+        world.growatt_export_limit_active,
+    )
+
     if world.injection_tariff < tariff_cfg.enter_threshold:
         if world.growatt_export_limit_active:
+            logger.info("startup: tariff below threshold and limit already active → resuming REGULATING")
             return State.REGULATING  # resume regulation
         else:
+            logger.info("startup: tariff below threshold but limit not active → entering ENTERING_CURTAILMENT")
             return State.ENTERING_CURTAILMENT  # need to enter
     else:
         if world.growatt_export_limit_active:
+            logger.info("startup: tariff above threshold but limit still active → entering EXITING_CURTAILMENT to clean up")
             return State.EXITING_CURTAILMENT  # cleanup needed
         else:
+            logger.info("startup: tariff above threshold and no limit active → IDLE")
             return State.IDLE
 
 
@@ -94,11 +108,23 @@ def _idle(
     cfg: Config,
     tariff_cfg: TariffConfig,
 ) -> Action:
+    logger.info(
+        "idle: injection_tariff=%.4f enter_threshold=%.4f",
+        world.injection_tariff, tariff_cfg.enter_threshold,
+    )
     if world.injection_tariff < tariff_cfg.enter_threshold:
+        logger.info(
+            "idle → ENTERING_CURTAILMENT: tariff %.4f < threshold %.4f",
+            world.injection_tariff, tariff_cfg.enter_threshold,
+        )
         return Action(
             next_state=State.ENTERING_CURTAILMENT,
             reason="injection tariff below enter threshold",
         )
+    logger.info(
+        "idle: staying idle, tariff %.4f >= threshold %.4f",
+        world.injection_tariff, tariff_cfg.enter_threshold,
+    )
     return Action(
         next_state=State.IDLE,
         wait_seconds=cfg.control.period_seconds,
@@ -114,7 +140,18 @@ def _entering(
     time_in_state: float,
 ) -> Action:
     wait = ctrl_cfg.growatt_mode_change_wait_seconds
+    logger.info(
+        "entering: time_in_state=%.0fs growatt_mode_change_wait=%ds "
+        "growatt_export_limit_pct=%.0f%% start_apsystems_pct=%d%%",
+        time_in_state, wait,
+        ctrl_cfg.growatt_export_limit_pct, ctrl_cfg.start_apsystems_pct,
+    )
     if time_in_state < wait:
+        remaining = wait - int(time_in_state)
+        logger.info(
+            "entering: still waiting for Growatt mode change (%.0fs elapsed, %ds remaining)",
+            time_in_state, remaining,
+        )
         # Still waiting for Growatt mode change to take effect
         return Action(
             set_growatt_export_limit_pct=ctrl_cfg.growatt_export_limit_pct,
@@ -122,10 +159,14 @@ def _entering(
             enable_apsystems_power_limit=True,
             set_ev_mode="minpv",
             next_state=State.ENTERING_CURTAILMENT,
-            wait_seconds=min(10, wait - int(time_in_state)),
+            wait_seconds=min(10, remaining),
             reason="waiting for Growatt mode change",
         )
 
+    logger.info(
+        "entering → REGULATING: Growatt mode change wait elapsed (%.0fs >= %ds)",
+        time_in_state, wait,
+    )
     return Action(
         set_growatt_export_limit_pct=ctrl_cfg.growatt_export_limit_pct,
         set_apsystems_pct=ctrl_cfg.start_apsystems_pct,
@@ -146,6 +187,15 @@ def _regulating(
 ) -> Action:
     from .controller import ControlInput, compute_decision
 
+    tariff_cfg = cfg.tariff
+    logger.info(
+        "regulating: injection_tariff=%.4f exit_threshold=%.4f "
+        "time_in_state=%.0fs min_dwell=%ds growatt_export_limit_active=%s",
+        world.injection_tariff, tariff_cfg.exit_threshold,
+        time_in_state, tariff_cfg.min_dwell_seconds,
+        world.growatt_export_limit_active,
+    )
+
     # Run the controller to get the APsystems decision
     ctrl_input = ControlInput(
         grid_power=world.grid_power,
@@ -155,7 +205,6 @@ def _regulating(
     decision = compute_decision(ctrl_input, ctrl_cfg)
 
     # Check tariff exit condition
-    tariff_cfg = cfg.tariff
     next_state = State.REGULATING
     reason = decision.reason
 
@@ -163,11 +212,26 @@ def _regulating(
         if time_in_state >= tariff_cfg.min_dwell_seconds:
             next_state = State.EXITING_CURTAILMENT
             reason = "injection tariff above exit threshold, dwell elapsed"
+            logger.info(
+                "regulating → EXITING: tariff %.4f >= %.4f and dwell %.0fs >= %ds",
+                world.injection_tariff, tariff_cfg.exit_threshold,
+                time_in_state, tariff_cfg.min_dwell_seconds,
+            )
         else:
             reason = "injection tariff above exit threshold, dwell deferred"
+            logger.info(
+                "regulating: exit deferred — tariff %.4f >= %.4f but dwell only %.0fs/%ds elapsed",
+                world.injection_tariff, tariff_cfg.exit_threshold,
+                time_in_state, tariff_cfg.min_dwell_seconds,
+            )
 
     # Only rewrite Growatt export limit if not currently active
     needs_limit_write = not world.growatt_export_limit_active
+    if needs_limit_write:
+        logger.info(
+            "regulating: Growatt export limit not active — rewriting to %.0f%%",
+            ctrl_cfg.growatt_export_limit_pct,
+        )
 
     return Action(
         set_apsystems_pct=decision.new_apsystems_pct,
@@ -188,6 +252,11 @@ def _exiting(
     evcc_cfg: EvccConfig,
 ) -> Action:
     restore_ev = evcc_cfg.default_ev_mode if world.current_ev_mode == "minpv" else None
+    logger.info(
+        "exiting: current_ev_mode=%s → restore_ev=%s (default=%s) "
+        "apsystems → 100%% growatt_export_limit → disabled",
+        world.current_ev_mode, restore_ev, evcc_cfg.default_ev_mode,
+    )
     return Action(
         disable_growatt_export_limit=True,
         set_apsystems_pct=100,
