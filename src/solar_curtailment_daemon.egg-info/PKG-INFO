@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: solar-curtailment-daemon
+Version: 0.1.0
+Summary: Solar curtailment daemon for negative tariff periods
+Requires-Python: >=3.10
+Requires-Dist: pymodbus>=3.6
+Requires-Dist: httpx>=0.27
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: structlog>=24.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-mock>=3.14; extra == "dev"

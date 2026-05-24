@@ -1,0 +1,38 @@
+growatt:
+  host: 10.0.0.150
+  port: 502
+
+apsystems:
+  host: 10.0.0.150
+  ecu_port: 1503
+
+evcc:
+  base_url: http://10.0.0.150:7070
+  ev_loadpoint_id: 1
+  default_ev_mode: pv
+
+control:
+  period_seconds: 30
+  sample_count: 6
+  sample_interval_seconds: 5
+
+  export_setpoint_watts: -200
+  deadband_watts: 100
+  step_up_pct: 5
+  step_down_pct: 10
+
+  growatt_pinned_threshold_watts: 100
+  growatt_export_limit_pct: 5
+  start_apsystems_pct: 50
+  growatt_mode_change_wait_seconds: 120
+
+tariff:
+  enter_threshold: -0.005
+  exit_threshold: 0.0
+  deep_negative_threshold: -0.15
+  min_dwell_seconds: 600
+
+logging:
+  level: INFO
+  format: json
+  file: /var/log/curtailment.log
