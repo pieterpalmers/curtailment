@@ -149,7 +149,7 @@ class GrowattClient:
             if attempt > 0:
                 time.sleep(0.5 * attempt)
             try:
-                result = read_fn(address, count, device_id=SLAVE_ID)
+                result = read_fn(address, count=count, device_id=SLAVE_ID)
                 if result.isError():
                     raise ConnectionError(f"Modbus read error at {address}: {result}")
                 return result

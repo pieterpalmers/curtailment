@@ -127,9 +127,6 @@ class Daemon:
 
         ctrl_cfg = self.cfg.control
 
-        # Ensure APSystems connection is alive (ECU drops idle connections)
-        self._read_apsystems_connection()
-
         # Read tariffs (single reads, no smoothing needed)
         injection_tariff = self._read_evcc_injection_tariff()
         consumption_tariff = self._read_evcc_consumption_tariff()
@@ -151,7 +148,9 @@ class Daemon:
 
         limit_status = self._read_growatt_export_limit_status()
 
-        # Read APsystems
+        # Reconnect APSystems right before reading — ECU drops idle connections
+        # and Growatt sampling above takes ~30s, which exceeds the ECU idle timeout.
+        self._read_apsystems_connection()
         apsystems_pct = self._read_apsystems_power_limit()
 
         return WorldState(
@@ -308,6 +307,37 @@ class Daemon:
         self.apsystems.warm_up()
         self.evcc.connect()
         logger.info("All connections established")
+        self._log_startup_status()
+
+    def _log_startup_status(self) -> None:
+        """Log current device state at startup for operator awareness."""
+        try:
+            grid = self.growatt.read_grid_power()
+            pv = self.growatt.read_pv_power()
+            battery = self.growatt.read_battery_power()
+            export_limit = self.growatt.read_export_limit_status()
+            logger.info(
+                "Growatt startup status",
+                extra={
+                    "grid_power_w": grid,
+                    "pv_power_w": pv,
+                    "battery_power_w": battery,
+                    "export_limit_enabled": export_limit.enabled,
+                    "export_limit_pct": export_limit.limit_pct,
+                },
+            )
+        except Exception as e:
+            logger.warning("Could not read Growatt startup status: %s", e)
+
+        try:
+            self.apsystems.ensure_connected()
+            aps_pct = self.apsystems.read_power_limit()
+            logger.info(
+                "APSystems startup status",
+                extra={"power_limit_pct": aps_pct},
+            )
+        except Exception as e:
+            logger.warning("Could not read APSystems startup status: %s", e)
 
     def _disconnect_all(self) -> None:
         logger.info("Disconnecting from all services...")

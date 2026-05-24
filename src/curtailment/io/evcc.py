@@ -59,8 +59,7 @@ class EvccClient:
             return getattr(self, "_injection_tariff_override", -0.10)
         resp = self._client.get(self._injection_tariff_path)  # type: ignore
         resp.raise_for_status()
-        data = resp.json()
-        return float(data["result"][self._tariff_field])
+        return self._current_rate(resp.json())
 
     def get_consumption_tariff(self) -> float:
         """€/kWh, can be negative. Reads from consumption tariff endpoint."""
@@ -68,8 +67,19 @@ class EvccClient:
             return getattr(self, "_consumption_tariff_override", 0.05)
         resp = self._client.get(self._consumption_tariff_path)  # type: ignore
         resp.raise_for_status()
-        data = resp.json()
-        return float(data["result"][self._tariff_field])
+        return self._current_rate(resp.json())
+
+    def _current_rate(self, data: dict) -> float:
+        """Extract the current tariff value from a rates response."""
+        from datetime import datetime, timezone
+        now = datetime.now(tz=timezone.utc)
+        for entry in data["rates"]:
+            start = datetime.fromisoformat(entry["start"])
+            end = datetime.fromisoformat(entry["end"])
+            if start <= now < end:
+                return float(entry[self._tariff_field])
+        # Fall back to first entry if none match (e.g. stale data)
+        return float(data["rates"][0][self._tariff_field])
 
     def get_loadpoint_mode(self, loadpoint_id: int) -> str:
         """Returns 'off', 'now', 'minpv', 'pv'. Reads from /api/state."""
@@ -78,7 +88,7 @@ class EvccClient:
         resp = self._client.get("/api/state")  # type: ignore
         resp.raise_for_status()
         data = resp.json()
-        loadpoints = data["result"]["loadpoints"]
+        loadpoints = data["result"]["loadpoints"] if "result" in data else data["loadpoints"]
         return str(loadpoints[loadpoint_id - 1]["mode"])
 
     def set_loadpoint_mode(self, loadpoint_id: int, mode: str) -> None:

@@ -33,7 +33,7 @@ class EvccConfig:
     default_ev_mode: str = "pv"
     injection_tariff_path: str = "/api/tariff/feedin"
     consumption_tariff_path: str = "/api/tariff/grid"
-    tariff_field: str = "rate"
+    tariff_field: str = "value"
 
 
 @dataclass
@@ -65,7 +65,7 @@ class TariffConfig:
 class LoggingConfig:
     level: str = "INFO"
     format: str = "json"
-    file: str = "/var/log/curtailment.log"
+    file: str | None = None
 
 
 @dataclass
@@ -148,6 +148,9 @@ def _parse_evcc(raw: dict[str, Any]) -> EvccConfig:
         base_url=raw["base_url"],
         ev_loadpoint_id=raw.get("ev_loadpoint_id", 1),
         default_ev_mode=raw.get("default_ev_mode", "pv"),
+        injection_tariff_path=raw.get("injection_tariff_path", "/api/tariff/feedin"),
+        consumption_tariff_path=raw.get("consumption_tariff_path", "/api/tariff/grid"),
+        tariff_field=raw.get("tariff_field", "value"),
     )
 
 
@@ -180,7 +183,7 @@ def _parse_logging(raw: dict[str, Any]) -> LoggingConfig:
     return LoggingConfig(
         level=raw.get("level", "INFO"),
         format=raw.get("format", "json"),
-        file=raw.get("file", "/var/log/curtailment.log"),
+        file=raw.get("file") or None,
     )
 
 

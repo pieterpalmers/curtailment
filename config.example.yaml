@@ -1,6 +1,6 @@
 growatt:
   host: 10.0.0.150
-  port: 502
+  port: 1502
 
 apsystems:
   host: 10.0.0.150
@@ -12,7 +12,7 @@ evcc:
   default_ev_mode: pv
   injection_tariff_path: /api/tariff/feedin
   consumption_tariff_path: /api/tariff/grid
-  tariff_field: rate
+  tariff_field: value
 
 control:
   period_seconds: 30
@@ -30,12 +30,11 @@ control:
   growatt_mode_change_wait_seconds: 120
 
 tariff:
-  enter_threshold: -0.005
-  exit_threshold: 0.0
+  enter_threshold: 0
+  exit_threshold: 0.005
   deep_negative_threshold: -0.15
   min_dwell_seconds: 600
 
 logging:
   level: INFO
-  format: json
-  file: /var/log/curtailment.log
+  format: console

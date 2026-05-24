@@ -9,7 +9,7 @@ Key quirks (from reference scripts):
 - Writes to any slave ID affect ALL microinverters globally
 - ECU drops TCP connection if idle >5-10 seconds
 - First call after connection may fail — warm_up() works around this
-- Two ports: 502 for power_limit, 1503 for ECU queries
+- All registers (power_limit and ECU queries) go through the single ECU port
 """
 
 from __future__ import annotations
@@ -41,51 +41,42 @@ class APSystemsClient:
         self,
         host: str,
         ecu_port: int = 1503,
-        inv_port: int = 502,
         timeout: int = 10,
         dry_run: bool = False,
     ) -> None:
         self.host = host
         self.ecu_port = ecu_port
-        self.inv_port = inv_port
         self.timeout = timeout
         self.dry_run = dry_run
         self._ecu_client: ModbusTcpClient | None = None
-        self._inv_client: ModbusTcpClient | None = None
         self._last_written_pct: int = 100
         self._first_connect_done = False
 
     def connect(self) -> None:
-        """Connect to the APSystems ECU (both ports)."""
+        """Connect to the APSystems ECU."""
         if self.dry_run:
-            logger.debug("dry_run: would connect to %s:%s and %s", self.host, self.ecu_port, self.inv_port)
+            logger.debug("dry_run: would connect to %s:%s", self.host, self.ecu_port)
             return
         from pymodbus.client import ModbusTcpClient
 
         self._ecu_client = ModbusTcpClient(
             self.host, port=self.ecu_port, timeout=self.timeout
         )
-        self._inv_client = ModbusTcpClient(
-            self.host, port=self.inv_port, timeout=self.timeout
-        )
         if not self._ecu_client.connect():
             raise ConnectionError(f"Failed to connect to APSystems ECU at {self.host}:{self.ecu_port}")
-        if not self._inv_client.connect():
-            raise ConnectionError(f"Failed to connect to APSystems inverters at {self.host}:{self.inv_port}")
 
     def warm_up(self) -> None:
         """Dummy read to work around 'first call fails' quirk.
 
-        The ECU may drop connections after ~10s idle. This warms up both connections.
+        The ECU may drop connections after ~10s idle. This warms up the connection.
         Also handles the BUGGY 300 (30%) state by forcing 100% on first connect.
         """
         if self.dry_run:
             logger.debug("dry_run: would warm up APSystems connection")
             return
         try:
-            # Read power limit to warm up the inverter port connection
-            result = self._inv_client.read_holding_registers(  # type: ignore
-                MODBUS_POWER_LIMIT_REGISTER, 1, device_id=SLAVE_ID
+            result = self._ecu_client.read_holding_registers(  # type: ignore
+                MODBUS_POWER_LIMIT_REGISTER, count=1, device_id=SLAVE_ID
             )
             if not result.isError() and hasattr(result, "registers"):
                 val = result.registers[0]
@@ -103,9 +94,6 @@ class APSystemsClient:
         if self._ecu_client:
             self._ecu_client.close()
             self._ecu_client = None
-        if self._inv_client:
-            self._inv_client.close()
-            self._inv_client = None
 
     def set_power_limit(self, pct: int) -> None:
         """pct in [0, 100]. Sets via port 502, unit 1.
@@ -123,7 +111,7 @@ class APSystemsClient:
         if value == BUGGY_LIMIT_PERMILLE:
             value += 1  # 301 instead of 300
 
-        result = self._inv_client.write_registers(  # type: ignore
+        result = self._ecu_client.write_registers(  # type: ignore
             MODBUS_POWER_LIMIT_REGISTER, [value], device_id=SLAVE_ID
         )
         if result.isError():
@@ -163,8 +151,8 @@ class APSystemsClient:
         """
         if self.dry_run:
             return self._last_written_pct
-        result = self._inv_client.read_holding_registers(  # type: ignore
-            MODBUS_POWER_LIMIT_REGISTER, 1, device_id=SLAVE_ID
+        result = self._ecu_client.read_holding_registers(  # type: ignore
+            MODBUS_POWER_LIMIT_REGISTER, count=1, device_id=SLAVE_ID
         )
         if result.isError():
             raise ConnectionError(f"Modbus read error at power_limit: {result}")
@@ -177,11 +165,16 @@ class APSystemsClient:
         return pct
 
     def ensure_connected(self) -> None:
-        """Reconnect if the ECU has dropped the connection (idle >10s)."""
+        """Reconnect to the ECU unconditionally.
+
+        The ECU drops idle TCP connections after ~5-10 seconds, and
+        is_socket_open() cannot detect a remote-side close, so we always
+        close and reconnect before any use.
+        """
         if self.dry_run:
             return
-        for name, client in [("ecu", self._ecu_client), ("inv", self._inv_client)]:
-            if client is None or not client.is_socket_open():  # type: ignore
-                logger.debug("Reconnecting %s client", name)
-                client.close()  # type: ignore
-                client.connect()  # type: ignore
+        if self._ecu_client is None:
+            raise ConnectionError("APSystems client not initialised — call connect() first")
+        self._ecu_client.close()
+        self._ecu_client.connect()
+        self.warm_up()

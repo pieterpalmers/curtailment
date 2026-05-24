@@ -30,12 +30,17 @@ def _setup_structlog(level: str, fmt: str, log_file: str | None) -> None:
     else:
         renderer = structlog.dev.ConsoleRenderer()
 
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.ExtraAdder(),
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.set_exc_info
+    ]
+
     structlog.configure(
         processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.dev.set_exc_info,
+            *shared_processors,
             renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
@@ -48,6 +53,7 @@ def _setup_structlog(level: str, fmt: str, log_file: str | None) -> None:
     # Direct stdlib logging to structlog
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=renderer,
+        foreign_pre_chain=shared_processors,
     )
     handler = logging.FileHandler(log_file) if log_file else logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
