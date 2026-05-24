@@ -66,7 +66,13 @@ def main() -> None:
         ecu_port=cfg.apsystems.ecu_port,
         dry_run=dry,
     )
-    evcc = EvccClient(base_url=cfg.evcc.base_url, dry_run=dry)
+    evcc = EvccClient(
+        base_url=cfg.evcc.base_url,
+        dry_run=dry,
+        injection_tariff_path=cfg.evcc.injection_tariff_path,
+        consumption_tariff_path=cfg.evcc.consumption_tariff_path,
+        tariff_field=cfg.evcc.tariff_field,
+    )
 
     # Create and run daemon
     from .daemon import Daemon
@@ -75,20 +81,25 @@ def main() -> None:
 
     if args.one_shot:
         daemon._connect_all()
-        from .state import WorldState, reconcile_startup
+        from .state import reconcile_startup
 
-        world = daemon._read_world()
+        world = daemon.read_world()
         state = reconcile_startup(world, cfg)
         from .state import decide_action
 
         action = decide_action(state, world, cfg, 0)
         print(f"State: {state.value}")
-        print(f"World: tariff={world.tariff}, grid={world.grid_power}W, pv={world.growatt_pv_power}W")
+        print(f"World: injection_tariff={world.injection_tariff}, consumption_tariff={world.consumption_tariff}")
+        print(f"  grid={world.grid_power}W (raw={world.grid_power_raw}W)")
+        print(f"  pv={world.growatt_pv_power}W, battery={world.battery_power}W")
+        print(f"  apsystems={world.current_apsystems_pct}%, ev_mode={world.current_ev_mode}")
         print(f"Action: {action.reason}, next_state={action.next_state.value}")
         if action.set_apsystems_pct is not None:
             print(f"  set_apsystems_pct={action.set_apsystems_pct}")
         if action.set_growatt_export_limit_pct is not None:
             print(f"  set_growatt_export_limit_pct={action.set_growatt_export_limit_pct}")
+        if action.enable_apsystems_power_limit:
+            print("  enable_apsystems_power_limit=True")
         if action.disable_growatt_export_limit:
             print("  disable_growatt_export_limit=True")
         if action.set_ev_mode is not None:

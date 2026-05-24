@@ -10,6 +10,9 @@ evcc:
   base_url: http://10.0.0.150:7070
   ev_loadpoint_id: 1
   default_ev_mode: pv
+  injection_tariff_path: /api/tariff/feedin
+  consumption_tariff_path: /api/tariff/grid
+  tariff_field: rate
 
 control:
   period_seconds: 30

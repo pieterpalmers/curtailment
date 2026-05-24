@@ -22,11 +22,13 @@ class State(Enum):
 class WorldState:
     """Snapshot read each cycle."""
 
-    tariff: float  # €/kWh, can be negative
+    injection_tariff: float  # €/kWh, can be negative — drives v1 state transitions
+    consumption_tariff: float  # €/kWh — logged, not branched on in v1
     grid_power: float  # smoothed, watts. positive=import, negative=export
+    grid_power_raw: float  # last instantaneous sample, for logging
     growatt_pv_power: float  # smoothed, watts
+    battery_power: float  # watts. positive=charging — logged, not used in v1
     growatt_export_limit_active: bool
-    growatt_export_limit_watts: float
     current_apsystems_pct: int  # 0-100
     current_ev_mode: str
 
@@ -38,6 +40,7 @@ class Action:
     set_growatt_export_limit_pct: float | None = None
     disable_growatt_export_limit: bool = False
     set_apsystems_pct: int | None = None
+    enable_apsystems_power_limit: bool = False
     set_ev_mode: str | None = None
     next_state: State = State.IDLE
     wait_seconds: int = 30
@@ -47,9 +50,8 @@ class Action:
 def reconcile_startup(world: WorldState, cfg: Config) -> State:
     """Determine state from external system state. No history needed."""
     tariff_cfg = cfg.tariff
-    growatt_cfg = cfg.growatt
 
-    if world.tariff < tariff_cfg.enter_threshold:
+    if world.injection_tariff < tariff_cfg.enter_threshold:
         if world.growatt_export_limit_active:
             return State.REGULATING  # resume regulation
         else:
@@ -92,15 +94,15 @@ def _idle(
     cfg: Config,
     tariff_cfg: TariffConfig,
 ) -> Action:
-    if world.tariff < tariff_cfg.enter_threshold:
+    if world.injection_tariff < tariff_cfg.enter_threshold:
         return Action(
             next_state=State.ENTERING_CURTAILMENT,
-            reason="tariff below enter threshold",
+            reason="injection tariff below enter threshold",
         )
     return Action(
         next_state=State.IDLE,
         wait_seconds=cfg.control.period_seconds,
-        reason="tariff above enter threshold",
+        reason="injection tariff above enter threshold",
     )
 
 
@@ -117,7 +119,8 @@ def _entering(
         return Action(
             set_growatt_export_limit_pct=ctrl_cfg.growatt_export_limit_pct,
             set_apsystems_pct=ctrl_cfg.start_apsystems_pct,
-            set_ev_mode="minpv" if evcc_cfg.default_ev_mode != "minpv" else None,
+            enable_apsystems_power_limit=True,
+            set_ev_mode="minpv",
             next_state=State.ENTERING_CURTAILMENT,
             wait_seconds=min(10, wait - int(time_in_state)),
             reason="waiting for Growatt mode change",
@@ -126,7 +129,8 @@ def _entering(
     return Action(
         set_growatt_export_limit_pct=ctrl_cfg.growatt_export_limit_pct,
         set_apsystems_pct=ctrl_cfg.start_apsystems_pct,
-        set_ev_mode="minpv" if evcc_cfg.default_ev_mode != "minpv" else None,
+        enable_apsystems_power_limit=True,
+        set_ev_mode="minpv",
         next_state=State.REGULATING,
         wait_seconds=ctrl_cfg.period_seconds,
         reason="entered curtailment, transitioning to regulating",
@@ -147,7 +151,6 @@ def _regulating(
         grid_power=world.grid_power,
         growatt_pv_power=world.growatt_pv_power,
         current_apsystems_pct=world.current_apsystems_pct,
-        growatt_export_limit_watts=world.growatt_export_limit_watts,
     )
     decision = compute_decision(ctrl_input, ctrl_cfg)
 
@@ -156,13 +159,21 @@ def _regulating(
     next_state = State.REGULATING
     reason = decision.reason
 
-    if world.tariff >= tariff_cfg.exit_threshold:
-        next_state = State.EXITING_CURTAILMENT
-        reason = "tariff above exit threshold"
+    if world.injection_tariff >= tariff_cfg.exit_threshold:
+        if time_in_state >= tariff_cfg.min_dwell_seconds:
+            next_state = State.EXITING_CURTAILMENT
+            reason = "injection tariff above exit threshold, dwell elapsed"
+        else:
+            reason = "injection tariff above exit threshold, dwell deferred"
+
+    # Only rewrite Growatt export limit if not currently active
+    needs_limit_write = not world.growatt_export_limit_active
 
     return Action(
         set_apsystems_pct=decision.new_apsystems_pct,
-        set_growatt_export_limit_pct=ctrl_cfg.growatt_export_limit_pct,
+        set_growatt_export_limit_pct=(
+            ctrl_cfg.growatt_export_limit_pct if needs_limit_write else None
+        ),
         set_ev_mode=None,  # no EV mode change during regulation for v1
         next_state=next_state,
         wait_seconds=ctrl_cfg.period_seconds,
@@ -176,10 +187,11 @@ def _exiting(
     ctrl_cfg: ControlConfig,
     evcc_cfg: EvccConfig,
 ) -> Action:
+    restore_ev = evcc_cfg.default_ev_mode if world.current_ev_mode == "minpv" else None
     return Action(
         disable_growatt_export_limit=True,
         set_apsystems_pct=100,
-        set_ev_mode=evcc_cfg.default_ev_mode,
+        set_ev_mode=restore_ev,
         next_state=State.IDLE,
         wait_seconds=ctrl_cfg.period_seconds,
         reason="exited curtailment, restoring defaults",

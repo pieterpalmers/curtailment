@@ -6,9 +6,9 @@ from curtailment.io.evcc import EvccClient
 
 
 class TestEvccClient:
-    def _make_client(self, dry_run=False):
+    def _make_client(self, dry_run=False, **kwargs):
         with patch("httpx.Client"):
-            client = EvccClient("http://10.0.0.150:7070", dry_run=dry_run)
+            client = EvccClient("http://10.0.0.150:7070", dry_run=dry_run, **kwargs)
             client._client = MagicMock()
             return client
 
@@ -16,34 +16,108 @@ class TestEvccClient:
         client = self._make_client()
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"injection": -0.08}
+        mock_resp.json.return_value = {"result": {"rate": -0.08}}
         client._client.get.return_value = mock_resp
         tariff = client.get_injection_tariff()
         assert tariff == -0.08
+        # Check it hits the right path
+        call_args = client._client.get.call_args
+        assert "feedin" in call_args[0][0] or "tariff" in call_args[0][0]
 
-    def test_get_injection_tariff_failure_returns_zero(self):
+    def test_get_injection_tariff_failure_raises(self):
         client = self._make_client()
         client._client.get.side_effect = Exception("connection refused")
-        tariff = client.get_injection_tariff()
-        assert tariff == 0.0
+        try:
+            tariff = client.get_injection_tariff()
+            assert False, "Should have raised"
+        except Exception:
+            pass  # Expected
+
+    def test_get_consumption_tariff(self):
+        client = self._make_client()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"result": {"rate": 0.05}}
+        client._client.get.return_value = mock_resp
+        tariff = client.get_consumption_tariff()
+        assert tariff == 0.05
+        # Check it hits the right path
+        call_args = client._client.get.call_args
+        assert "grid" in call_args[0][0] or "tariff" in call_args[0][0]
+
+    def test_get_consumption_tariff_failure_raises(self):
+        client = self._make_client()
+        client._client.get.side_effect = Exception("connection refused")
+        try:
+            tariff = client.get_consumption_tariff()
+            assert False, "Should have raised"
+        except Exception:
+            pass  # Expected
 
     def test_get_loadpoint_mode(self):
         client = self._make_client()
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"mode": "minpv"}
+        mock_resp.json.return_value = {"result": {"loadpoints": [{"mode": "minpv"}]}}
         client._client.get.return_value = mock_resp
         mode = client.get_loadpoint_mode(1)
         assert mode == "minpv"
+        # Check it uses /api/state
+        call_args = client._client.get.call_args
+        assert call_args[0][0] == "/api/state"
+
+    def test_loadpoint_index_off_by_one_handled(self):
+        """Loadpoint ID 1 should index position 0 in the array."""
+        client = self._make_client()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        # Two loadpoints, ID 1 = index 0, ID 2 = index 1
+        mock_resp.json.return_value = {
+            "result": {"loadpoints": [{"mode": "pv"}, {"mode": "now"}]}
+        }
+        client._client.get.return_value = mock_resp
+        assert client.get_loadpoint_mode(1) == "pv"
+        assert client.get_loadpoint_mode(2) == "now"
 
     def test_set_loadpoint_mode(self):
         client = self._make_client()
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        client._client.put.return_value = mock_resp
+        client._client.post.return_value = mock_resp
         client.set_loadpoint_mode(1, "minpv")
-        call_args = client._client.put.call_args
-        assert "mode" in call_args[1]["json"] or "mode" in call_args[0][1]
+        # Should use POST /api/loadpoints/{id}/mode/{mode}
+        call_args = client._client.post.call_args
+        assert "loadpoints/1/mode/minpv" in call_args[0][0]
+
+    def test_set_loadpoint_mode_failure_raises(self):
+        client = self._make_client()
+        client._client.post.side_effect = Exception("connection refused")
+        try:
+            client.set_loadpoint_mode(1, "minpv")
+            assert False, "Should have raised"
+        except Exception:
+            pass  # Expected
+
+    def test_uses_configured_tariff_paths(self):
+        client = self._make_client(
+            injection_tariff_path="/api/tariff/feedin",
+            consumption_tariff_path="/api/tariff/grid",
+            tariff_field="rate",
+        )
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"result": {"rate": -0.05}}
+        client._client.get.return_value = mock_resp
+
+        # Test injection tariff uses configured path
+        client.get_injection_tariff()
+        call_args = client._client.get.call_args
+        assert "feedin" in call_args[0][0]
+
+        # Test consumption tariff uses configured path
+        client.get_consumption_tariff()
+        call_args = client._client.get.call_args
+        assert "grid" in call_args[0][0]
 
     def test_dry_run_no_requests(self):
         client = EvccClient("http://10.0.0.150:7070", dry_run=True)

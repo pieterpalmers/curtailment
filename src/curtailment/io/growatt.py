@@ -80,6 +80,17 @@ class GrowattClient:
         self._last_pv_power = watts
         return watts
 
+    REG_BATTERY_POWER = 31200  # INT32 high|low, 0.1 W, + = charging
+
+    def read_battery_power(self) -> float:
+        """Register 31200 Battery Power. Watts. Positive=charging."""
+        if self.dry_run:
+            return getattr(self, "_last_battery_power", 0.0)
+        raw = self._read_input_int32(self.REG_BATTERY_POWER)
+        watts = raw / 10.0
+        self._last_battery_power = watts
+        return watts
+
     def read_export_limit_status(self) -> ExportLimitStatus:
         """Returns enabled status and limit percentage."""
         if self.dry_run:
@@ -114,8 +125,8 @@ class GrowattClient:
         logger.info("Growatt export limit disabled")
 
     def _read_input_int32(self, address: int) -> int:
-        """Read a 32-bit signed integer from input registers (1-based address)."""
-        result = self._retry_read(self._client.read_input_registers, address - 1, 2)
+        """Read a 32-bit signed integer from input registers (high|low)."""
+        result = self._retry_read(self._client.read_input_registers, address, 2)
         return _int32_from_registers(result.registers[0], result.registers[1])
 
     def _read_holding(self, address: int) -> int:
@@ -138,7 +149,7 @@ class GrowattClient:
             if attempt > 0:
                 time.sleep(0.5 * attempt)
             try:
-                result = read_fn(address, count, slave=SLAVE_ID)
+                result = read_fn(address, count, device_id=SLAVE_ID)
                 if result.isError():
                     raise ConnectionError(f"Modbus read error at {address}: {result}")
                 return result
@@ -155,7 +166,7 @@ class GrowattClient:
             if attempt > 0:
                 time.sleep(0.5 * attempt)
             try:
-                result = write_fn(address, values, slave=SLAVE_ID)
+                result = write_fn(address, values, device_id=SLAVE_ID)
                 if result.isError():
                     raise ConnectionError(f"Modbus write error at {address}: {result}")
                 return result

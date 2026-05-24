@@ -85,7 +85,7 @@ class APSystemsClient:
         try:
             # Read power limit to warm up the inverter port connection
             result = self._inv_client.read_holding_registers(  # type: ignore
-                MODBUS_POWER_LIMIT_REGISTER, 1, slave=SLAVE_ID
+                MODBUS_POWER_LIMIT_REGISTER, 1, device_id=SLAVE_ID
             )
             if not result.isError() and hasattr(result, "registers"):
                 val = result.registers[0]
@@ -124,7 +124,7 @@ class APSystemsClient:
             value += 1  # 301 instead of 300
 
         result = self._inv_client.write_registers(  # type: ignore
-            MODBUS_POWER_LIMIT_REGISTER, [value], slave=SLAVE_ID
+            MODBUS_POWER_LIMIT_REGISTER, [value], device_id=SLAVE_ID
         )
         if result.isError():
             raise ConnectionError(f"Modbus write error at power_limit: {result}")
@@ -137,7 +137,7 @@ class APSystemsClient:
             logger.info("dry_run: would enable APsystems power limit")
             return
         result = self._ecu_client.write_registers(  # type: ignore
-            MODBUS_POWER_LIMIT_ENA_REGISTER, [1], slave=SLAVE_ID
+            MODBUS_POWER_LIMIT_ENA_REGISTER, [1], device_id=SLAVE_ID
         )
         if result.isError():
             raise ConnectionError(f"Modbus write error at power_limit_ena: {result}")
@@ -149,7 +149,7 @@ class APSystemsClient:
             logger.info("dry_run: would disable APsystems power limit")
             return
         result = self._ecu_client.write_registers(  # type: ignore
-            MODBUS_POWER_LIMIT_ENA_REGISTER, [0], slave=SLAVE_ID
+            MODBUS_POWER_LIMIT_ENA_REGISTER, [0], device_id=SLAVE_ID
         )
         if result.isError():
             raise ConnectionError(f"Modbus write error at power_limit_ena: {result}")
@@ -164,7 +164,7 @@ class APSystemsClient:
         if self.dry_run:
             return self._last_written_pct
         result = self._inv_client.read_holding_registers(  # type: ignore
-            MODBUS_POWER_LIMIT_REGISTER, 1, slave=SLAVE_ID
+            MODBUS_POWER_LIMIT_REGISTER, 1, device_id=SLAVE_ID
         )
         if result.isError():
             raise ConnectionError(f"Modbus read error at power_limit: {result}")

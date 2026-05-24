@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("curtailment")
 
+# Per-source failure counters for persistent-IO-error detection
+FAIL_SOURCES = ["growatt", "apsystems", "evcc"]
+FAIL_THRESHOLD = 3
+
 
 class Daemon:
     """Main daemon that runs the curtailment control loop."""
@@ -36,6 +40,8 @@ class Daemon:
         self._state: State | None = None
         self._time_in_state: float = 0.0
         self._state_start: float = 0.0
+        self._fail_counts: dict[str, int] = {src: 0 for src in FAIL_SOURCES}
+        self._fail_logged: dict[str, bool] = {src: False for src in FAIL_SOURCES}
 
     def run(self) -> None:
         """Main loop. Runs until SIGTERM/SIGINT."""
@@ -77,6 +83,22 @@ class Daemon:
         except Exception as e:
             logger.warning("Failed to execute action: %s — continuing", e)
 
+        # Emit per-cycle structured log (spec §13)
+        logger.info(
+            "cycle",
+            extra={
+                "state": self._state.value if self._state else "none",  # type: ignore
+                "injection_tariff": world.injection_tariff,
+                "consumption_tariff": world.consumption_tariff,
+                "grid_power_smoothed": world.grid_power,
+                "grid_power_raw": world.grid_power_raw,
+                "growatt_pv_power": world.growatt_pv_power,
+                "battery_power": world.battery_power,
+                "apsystems_pct": world.current_apsystems_pct,
+                "decision_reason": action.reason,
+            },
+        )
+
         # State transition
         if action.next_state != self._state:
             logger.info(
@@ -94,46 +116,146 @@ class Daemon:
         if not self._shutdown and wait > 0:
             time.sleep(wait)
 
+    def read_world(self) -> WorldState:
+        """Public method to read world state. Used by scripts."""
+        return self._read_world()
+
     def _read_world(self) -> WorldState:
         """Read all external state needed for a decision."""
         from .state import WorldState
+        from .util.smoothing import sample_median
+
+        ctrl_cfg = self.cfg.control
 
         # Ensure APSystems connection is alive (ECU drops idle connections)
-        self.apsystems.ensure_connected()
+        self._read_apsystems_connection()
 
-        # Read tariff
-        tariff = self.evcc.get_injection_tariff()
+        # Read tariffs (single reads, no smoothing needed)
+        injection_tariff = self._read_evcc_injection_tariff()
+        consumption_tariff = self._read_evcc_consumption_tariff()
+        ev_mode = self._read_evcc_loadpoint_mode()
 
-        # Read Growatt
-        grid_power = self.growatt.read_grid_power()
-        pv_power = self.growatt.read_pv_power()
-        limit_status = self.growatt.read_export_limit_status()
+        # Read Growatt with median sampling
+        grid_power_raw = self.growatt.read_grid_power()
+        grid_power = sample_median(
+            self.growatt.read_grid_power,
+            count=ctrl_cfg.sample_count,
+            interval_seconds=ctrl_cfg.sample_interval_seconds,
+        )
+        pv_power = sample_median(
+            self.growatt.read_pv_power,
+            count=ctrl_cfg.sample_count,
+            interval_seconds=ctrl_cfg.sample_interval_seconds,
+        )
+        battery_power = self._read_growatt_battery_power()
+
+        limit_status = self._read_growatt_export_limit_status()
 
         # Read APsystems
-        apsystems_pct = self.apsystems.read_power_limit()
-
-        # Read EV mode
-        ev_mode = self.evcc.get_loadpoint_mode(self.cfg.evcc.ev_loadpoint_id)
-
-        # Compute effective export limit watts
-        if limit_status.enabled and limit_status.limit_pct is not None:
-            # Approximate: limit_pct % of a nominal max (e.g. 4000W)
-            # In practice, we track what we set
-            growatt_limit_watts = (
-                abs(self.cfg.control.growatt_export_limit_pct) / 100.0 * 4000.0
-            )
-        else:
-            growatt_limit_watts = 0.0
+        apsystems_pct = self._read_apsystems_power_limit()
 
         return WorldState(
-            tariff=tariff,
+            injection_tariff=injection_tariff,
+            consumption_tariff=consumption_tariff,
             grid_power=grid_power,
+            grid_power_raw=grid_power_raw,
             growatt_pv_power=pv_power,
+            battery_power=battery_power,
             growatt_export_limit_active=limit_status.enabled,
-            growatt_export_limit_watts=growatt_limit_watts,
             current_apsystems_pct=apsystems_pct,
             current_ev_mode=ev_mode,
         )
+
+    def _read_growatt_world(self) -> dict:
+        """Read Growatt-specific world state. Returns dict for partial updates."""
+        return {}
+
+    def _read_apsystems_connection(self) -> None:
+        """Ensure APSystems connection is alive."""
+        try:
+            self.apsystems.ensure_connected()
+            self._reset_fail("apsystems")
+        except Exception as e:
+            self._track_fail("apsystems", e, "APSystems connection check failed")
+
+    def _read_growatt_battery_power(self) -> float:
+        """Read battery power with failure tracking."""
+        try:
+            result = self.growatt.read_battery_power()
+            self._reset_fail("growatt")
+            return result
+        except Exception as e:
+            self._track_fail("growatt", e, "Growatt battery power read failed")
+            raise
+
+    def _read_growatt_export_limit_status(self):
+        """Read Growatt export limit status with failure tracking."""
+        try:
+            result = self.growatt.read_export_limit_status()
+            self._reset_fail("growatt")
+            return result
+        except Exception as e:
+            self._track_fail("growatt", e, "Growatt export limit status read failed")
+            raise
+
+    def _read_apsystems_power_limit(self) -> int:
+        """Read APSystems power limit with failure tracking."""
+        try:
+            result = self.apsystems.read_power_limit()
+            self._reset_fail("apsystems")
+            return result
+        except Exception as e:
+            self._track_fail("apsystems", e, "APSystems power limit read failed")
+            raise
+
+    def _read_evcc_injection_tariff(self) -> float:
+        """Read injection tariff with failure tracking."""
+        try:
+            result = self.evcc.get_injection_tariff()
+            self._reset_fail("evcc")
+            return result
+        except Exception as e:
+            self._track_fail("evcc", e, "evcc injection tariff read failed")
+            raise
+
+    def _read_evcc_consumption_tariff(self) -> float:
+        """Read consumption tariff with failure tracking."""
+        try:
+            result = self.evcc.get_consumption_tariff()
+            self._reset_fail("evcc")
+            return result
+        except Exception as e:
+            self._track_fail("evcc", e, "evcc consumption tariff read failed")
+            raise
+
+    def _read_evcc_loadpoint_mode(self) -> str:
+        """Read EV loadpoint mode with failure tracking."""
+        try:
+            result = self.evcc.get_loadpoint_mode(self.cfg.evcc.ev_loadpoint_id)
+            self._reset_fail("evcc")
+            return result
+        except Exception as e:
+            self._track_fail("evcc", e, "evcc loadpoint mode read failed")
+            raise
+
+    def _track_fail(self, source: str, exc: Exception, msg: str) -> None:
+        """Track a failure for a source and log if threshold crossed."""
+        self._fail_counts[source] += 1
+        count = self._fail_counts[source]
+        if count >= FAIL_THRESHOLD and not self._fail_logged[source]:
+            logger.error(
+                "Persistent IO failure on %s: %s consecutive failures — %s: %s",
+                source, count, msg, exc,
+            )
+            self._fail_logged[source] = True
+        # Re-raise so the caller knows
+        raise
+
+    def _reset_fail(self, source: str) -> None:
+        """Reset failure counter for a source on success."""
+        if self._fail_counts[source] > 0:
+            self._fail_counts[source] = 0
+            self._fail_logged[source] = False
 
     def _execute_action(self, action: Action) -> None:
         """Apply each non-null field of Action to the right IO client."""
@@ -142,6 +264,9 @@ class Daemon:
 
         if action.disable_growatt_export_limit:
             self.growatt.disable_export_limit()
+
+        if action.enable_apsystems_power_limit:
+            self.apsystems.enable_power_limit()
 
         if action.set_apsystems_pct is not None:
             self.apsystems.set_power_limit(action.set_apsystems_pct)
@@ -152,16 +277,29 @@ class Daemon:
             )
 
     def _reconcile_startup(self) -> State:
-        """Determine initial state from external system state."""
+        """Determine initial state from external system state. Retries on failure."""
         from .state import WorldState, reconcile_startup
 
-        try:
-            world = self._read_world()
-        except Exception:
-            logger.warning("Startup reconciliation failed, defaulting to IDLE")
-            return __import__("curtailment.state", fromlist=["State"]).State.IDLE
+        max_retries = 3
+        backoff = 5  # seconds
 
-        return reconcile_startup(world, self.cfg)
+        for attempt in range(max_retries):
+            try:
+                world = self._read_world()
+                return reconcile_startup(world, self.cfg)
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        "Startup reconciliation failed (attempt %s/%s): %s — retrying in %ss",
+                        attempt + 1, max_retries, e, backoff,
+                    )
+                    time.sleep(backoff)
+                else:
+                    logger.error(
+                        "Startup reconciliation failed after %s attempts, defaulting to IDLE: %s",
+                        max_retries, e,
+                    )
+                    return __import__("curtailment.state", fromlist=["State"]).State.IDLE
 
     def _connect_all(self) -> None:
         logger.info("Connecting to all services...")

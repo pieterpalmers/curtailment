@@ -26,10 +26,16 @@ class EvccClient:
         base_url: str,
         timeout: float = 5.0,
         dry_run: bool = False,
+        injection_tariff_path: str = "/api/tariff/feedin",
+        consumption_tariff_path: str = "/api/tariff/grid",
+        tariff_field: str = "rate",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.dry_run = dry_run
+        self._injection_tariff_path = injection_tariff_path
+        self._consumption_tariff_path = consumption_tariff_path
+        self._tariff_field = tariff_field
         self._client: httpx.Client | None = None
         self._last_mode: str | None = None
 
@@ -48,47 +54,41 @@ class EvccClient:
             self._client = None
 
     def get_injection_tariff(self) -> float:
-        """€/kWh, can be negative.
-
-        Falls back to 0.0 if the API endpoint is not available.
-        """
+        """€/kWh, can be negative. Reads from injection tariff endpoint."""
         if self.dry_run:
-            return getattr(self, "_tariff_override", -0.10)
-        try:
-            resp = self._client.get("/api/tariff")  # type: ignore
-            resp.raise_for_status()
-            data = resp.json()
-            # The tariff API returns the injection rate
-            return float(data.get("injection", 0.0))
-        except Exception as e:
-            logger.warning("Failed to read tariff from evcc: %s", e)
-            return 0.0
+            return getattr(self, "_injection_tariff_override", -0.10)
+        resp = self._client.get(self._injection_tariff_path)  # type: ignore
+        resp.raise_for_status()
+        data = resp.json()
+        return float(data["result"][self._tariff_field])
+
+    def get_consumption_tariff(self) -> float:
+        """€/kWh, can be negative. Reads from consumption tariff endpoint."""
+        if self.dry_run:
+            return getattr(self, "_consumption_tariff_override", 0.05)
+        resp = self._client.get(self._consumption_tariff_path)  # type: ignore
+        resp.raise_for_status()
+        data = resp.json()
+        return float(data["result"][self._tariff_field])
 
     def get_loadpoint_mode(self, loadpoint_id: int) -> str:
-        """Returns 'off', 'now', 'minpv', 'pv'."""
+        """Returns 'off', 'now', 'minpv', 'pv'. Reads from /api/state."""
         if self.dry_run:
             return self._last_mode or "pv"
-        try:
-            resp = self._client.get(f"/api/loadpoints/{loadpoint_id}")  # type: ignore
-            resp.raise_for_status()
-            data = resp.json()
-            return str(data.get("mode", "pv"))
-        except Exception as e:
-            logger.warning("Failed to read loadpoint mode from evcc: %s", e)
-            return "pv"
+        resp = self._client.get("/api/state")  # type: ignore
+        resp.raise_for_status()
+        data = resp.json()
+        loadpoints = data["result"]["loadpoints"]
+        return str(loadpoints[loadpoint_id - 1]["mode"])
 
     def set_loadpoint_mode(self, loadpoint_id: int, mode: str) -> None:
-        """Set the loadpoint mode."""
+        """Set the loadpoint mode. Uses POST /api/loadpoints/{id}/mode/{mode}."""
         if self.dry_run:
-            logger.info("dry_run: would set evcc loadpoint %s mode to %s", loadpoint_id, mode)
+            logger.info("dry_run: would POST evcc loadpoint %s mode %s", loadpoint_id, mode)
             self._last_mode = mode
             return
-        try:
-            resp = self._client.put(  # type: ignore
-                f"/api/loadpoints/{loadpoint_id}/mode",
-                json={"mode": mode},
-            )
-            resp.raise_for_status()
-            logger.info("evcc loadpoint %s mode set to %s", loadpoint_id, mode)
-        except Exception as e:
-            logger.warning("Failed to set loadpoint mode on evcc: %s", e)
+        resp = self._client.post(  # type: ignore
+            f"/api/loadpoints/{loadpoint_id}/mode/{mode}"
+        )
+        resp.raise_for_status()
+        logger.info("evcc loadpoint %s mode set to %s", loadpoint_id, mode)

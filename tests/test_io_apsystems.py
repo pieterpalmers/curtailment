@@ -23,6 +23,8 @@ class TestAPSystemsClient:
         call_args = client._inv_client.write_registers.call_args
         assert call_args[0][0] == 40189  # register
         assert call_args[0][1] == [250]  # value*10
+        # Check that device_id is used, not slave
+        assert "device_id" in call_args[1] or len(call_args[0]) > 2
 
     def test_set_power_limit_avoid_buggy_300(self):
         client = self._make_client()
@@ -76,6 +78,8 @@ class TestAPSystemsClient:
         call_args = client._ecu_client.write_registers.call_args
         assert call_args[0][0] == 40193  # register
         assert call_args[0][1] == [1]  # enable
+        # Check that device_id is used
+        assert "device_id" in call_args[1] or len(call_args[0]) > 2
 
     def test_warm_up_handles_buggy_300(self):
         client = self._make_client()

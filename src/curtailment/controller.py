@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .config import ControlConfig
+
 
 @dataclass
 class ControlInput:
     grid_power: float  # smoothed, watts. positive=import, negative=export
     growatt_pv_power: float  # smoothed, watts
     current_apsystems_pct: int  # 0-100
-    growatt_export_limit_watts: float  # the effective watt limit Growatt is enforcing
 
 
 @dataclass
@@ -73,6 +74,3 @@ def compute_decision(inp: ControlInput, cfg: ControlConfig) -> ControlDecision:
         reason="hold",
     )
 
-
-# Import locally to avoid circular; use string annotation above
-from .config import ControlConfig  # noqa: E402

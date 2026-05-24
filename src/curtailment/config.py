@@ -31,6 +31,9 @@ class EvccConfig:
     base_url: str
     ev_loadpoint_id: int = 1
     default_ev_mode: str = "pv"
+    injection_tariff_path: str = "/api/tariff/feedin"
+    consumption_tariff_path: str = "/api/tariff/grid"
+    tariff_field: str = "rate"
 
 
 @dataclass
@@ -53,7 +56,7 @@ class ControlConfig:
 @dataclass
 class TariffConfig:
     enter_threshold: float = -0.005
-    exit_threshold: float = 0.0
+    exit_threshold: float = 0.005
     deep_negative_threshold: float = -0.15
     min_dwell_seconds: int = 600
 
@@ -109,6 +112,18 @@ class Config:
             raise ConfigError("step sizes must be positive")
         if self.tariff.enter_threshold >= self.tariff.exit_threshold:
             raise ConfigError("enter_threshold must be < exit_threshold")
+        # New validators from Fix 5.1
+        # Sampling takes (count-1) * interval seconds; must fit within period
+        if (self.control.sample_count - 1) * self.control.sample_interval_seconds >= self.control.period_seconds:
+            raise ConfigError("sample_count * sample_interval_seconds must be < period_seconds")
+        if self.evcc.default_ev_mode not in {"off", "now", "minpv", "pv"}:
+            raise ConfigError("default_ev_mode must be one of: off, now, minpv, pv")
+        if self.tariff.enter_threshold > 0:
+            raise ConfigError("enter_threshold must be <= 0 (spec: enter when injection < 0)")
+        if self.tariff.exit_threshold <= 0:
+            raise ConfigError("exit_threshold must be > 0 (spec: exit when injection >= 0.005)")
+        if self.tariff.min_dwell_seconds < 0:
+            raise ConfigError("min_dwell_seconds must be >= 0")
 
 
 def _parse_growatt(raw: dict[str, Any]) -> GrowattConfig:

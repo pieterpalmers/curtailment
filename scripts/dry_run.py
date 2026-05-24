@@ -1,7 +1,7 @@
-"""Simulate the daemon against synthetic CSV inputs.
+"""Simulate the state machine against synthetic CSV inputs.
 
-CSV format: tariff,tariff,grid_power,pv_power
-Runs the controller logic and prints decisions without touching hardware.
+CSV format: tariff,grid_power,pv_power[,seconds_since_start]
+Drives decide_action through state transitions, advancing synthetic time_in_state.
 """
 
 from __future__ import annotations
@@ -11,12 +11,16 @@ import csv
 import sys
 from dataclasses import dataclass
 
+from curtailment.config import ControlConfig, TariffConfig
+from curtailment.state import State, WorldState, reconcile_startup, decide_action
+
 
 @dataclass
 class CsvRow:
-    tariff: float
+    injection_tariff: float
     grid_power: float
     pv_power: float
+    seconds_since_start: float = 0.0
 
 
 def main() -> None:
@@ -25,34 +29,68 @@ def main() -> None:
     parser.add_argument("--apsystems-pct", type=int, default=50, help="Starting APsystems %%")
     args = parser.parse_args()
 
-    from curtailment.config import ControlConfig
-    from curtailment.controller import ControlInput, compute_decision
-
     cfg = ControlConfig()
+    tariff_cfg = TariffConfig()
     current_pct = args.apsystems_pct
+    time_in_state = 0.0
+    state = State.IDLE
 
     rows = _load_csv(args.csv_file)
 
-    print(f"{'tariff':>10} {'grid':>8} {'pv':>8} {'aps_before':>12} {'decision':>15} {'aps_after':>11}")
-    print("-" * 70)
+    print(f"{'tariff':>10} {'grid':>8} {'pv':>8} {'state':>12} {'aps_before':>12} {'decision':>15} {'aps_after':>11}")
+    print("-" * 80)
 
-    for row in rows:
-        inp = ControlInput(
+    for i, row in enumerate(rows):
+        # Advance time for state machine
+        if i > 0:
+            time_in_state += row.seconds_since_start if row.seconds_since_start > 0 else cfg.period_seconds
+
+        world = WorldState(
+            injection_tariff=row.injection_tariff,
+            consumption_tariff=0.05,  # not used in v1 decisions
             grid_power=row.grid_power,
+            grid_power_raw=row.grid_power,
             growatt_pv_power=row.pv_power,
+            battery_power=0.0,
+            growatt_export_limit_active=(state == State.REGULATING or state == State.ENTERING_CURTAILMENT),
             current_apsystems_pct=current_pct,
-            growatt_export_limit_watts=200.0,
+            current_ev_mode="pv",
         )
-        decision = compute_decision(inp, cfg)
-        current_pct = decision.new_apsystems_pct
+
+        action = decide_action(state, world, _make_cfg(), time_in_state)
+
         print(
-            f"{row.tariff:>10.4f} "
+            f"{row.injection_tariff:>10.4f} "
             f"{row.grid_power:>8.0f} "
             f"{row.pv_power:>8.0f} "
-            f"{inp.current_apsystems_pct:>12} "
-            f"{decision.reason:>15} "
-            f"{current_pct:>11}"
+            f"{state.value:>12} "
+            f"{current_pct:>12} "
+            f"{action.reason:>15} "
+            f"{action.set_apsystems_pct if action.set_apsystems_pct is not None else current_pct:>11}"
         )
+
+        # Update state and pct for next cycle
+        if action.next_state != state:
+            time_in_state = 0.0  # reset on transition
+            state = action.next_state
+        if action.set_apsystems_pct is not None:
+            current_pct = action.set_apsystems_pct
+
+
+def _make_cfg():
+    """Create a simple config for dry run."""
+    from curtailment.config import (
+        Config, GrowattConfig, APSystemsConfig, EvccConfig,
+        LoggingConfig,
+    )
+    return Config(
+        growatt=GrowattConfig(host="x"),
+        apsystems=APSystemsConfig(host="y"),
+        evcc=EvccConfig(base_url="http://z"),
+        control=ControlConfig(),
+        tariff=TariffConfig(),
+        logging=LoggingConfig(),
+    )
 
 
 def _load_csv(path: str) -> list[CsvRow]:
@@ -62,9 +100,10 @@ def _load_csv(path: str) -> list[CsvRow]:
         for r in reader:
             rows.append(
                 CsvRow(
-                    tariff=float(r.get("tariff", 0)),
+                    injection_tariff=float(r.get("tariff", 0)),
                     grid_power=float(r.get("grid_power", 0)),
                     pv_power=float(r.get("pv_power", 0)),
+                    seconds_since_start=float(r.get("seconds_since_start", 0)),
                 )
             )
     return rows
