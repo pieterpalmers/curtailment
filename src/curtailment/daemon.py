@@ -95,6 +95,8 @@ class Daemon:
                 "grid_power_raw": world.grid_power_raw,
                 "growatt_pv_power": world.growatt_pv_power,
                 "battery_power": world.battery_power,
+                "growatt_export_limit_active": world.growatt_export_limit_active,
+                "growatt_export_limit_pct": world.growatt_export_limit_pct,
                 "apsystems_pct": world.current_apsystems_pct,
                 "decision_reason": action.reason,
             },
@@ -162,6 +164,7 @@ class Daemon:
             growatt_pv_power=pv_power,
             battery_power=battery_power,
             growatt_export_limit_active=limit_status.enabled,
+            growatt_export_limit_pct=limit_status.limit_pct,
             current_apsystems_pct=apsystems_pct,
             current_ev_mode=ev_mode,
         )

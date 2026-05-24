@@ -92,15 +92,15 @@ class GrowattClient:
         return watts
 
     def read_export_limit_status(self) -> ExportLimitStatus:
-        """Returns enabled status and limit percentage."""
+        """Returns enabled status and limit percentage. Pct is always read."""
         if self.dry_run:
             return ExportLimitStatus(
                 enabled=getattr(self, "_limit_ena", False),
-                limit_pct=getattr(self, "_limit_pct", None),
+                limit_pct=float(getattr(self, "_limit_pct", 0.0)),
             )
         enabled = self._read_holding(30200) == 1
         pct = float(self._read_holding(30201))
-        return ExportLimitStatus(enabled=enabled, limit_pct=pct if enabled else None)
+        return ExportLimitStatus(enabled=enabled, limit_pct=pct)
 
     def set_export_limit(self, pct: float) -> None:
         """pct in [-100, 100]. Enables limit if not enabled."""
@@ -180,7 +180,7 @@ class GrowattClient:
 @dataclass
 class ExportLimitStatus:
     enabled: bool
-    limit_pct: float | None
+    limit_pct: float  # always populated — read even when disabled
 
 
 def _int32_from_registers(high: int, low: int) -> int:

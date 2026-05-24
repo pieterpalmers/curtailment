@@ -32,6 +32,7 @@ class WorldState:
     growatt_pv_power: float  # smoothed, watts
     battery_power: float  # watts. positive=charging — logged, not used in v1
     growatt_export_limit_active: bool
+    growatt_export_limit_pct: float  # current pct on device (read even when disabled)
     current_apsystems_pct: int  # 0-100
     current_ev_mode: str
 
@@ -146,6 +147,20 @@ def _entering(
         time_in_state, wait,
         ctrl_cfg.growatt_export_limit_pct, ctrl_cfg.start_apsystems_pct,
     )
+    desired_pct = ctrl_cfg.growatt_export_limit_pct
+    needs_limit_write = (
+        not world.growatt_export_limit_active
+        or world.growatt_export_limit_pct != desired_pct
+    )
+    if needs_limit_write:
+        logger.info(
+            "entering: Growatt export limit needs write "
+            "(active=%s, current_pct=%.0f%%, desired_pct=%.0f%%)",
+            world.growatt_export_limit_active,
+            world.growatt_export_limit_pct,
+            desired_pct,
+        )
+
     if time_in_state < wait:
         remaining = wait - int(time_in_state)
         logger.info(
@@ -154,7 +169,7 @@ def _entering(
         )
         # Still waiting for Growatt mode change to take effect
         return Action(
-            set_growatt_export_limit_pct=ctrl_cfg.growatt_export_limit_pct,
+            set_growatt_export_limit_pct=desired_pct if needs_limit_write else None,
             set_apsystems_pct=ctrl_cfg.start_apsystems_pct,
             enable_apsystems_power_limit=True,
             set_ev_mode="minpv",
@@ -168,7 +183,7 @@ def _entering(
         time_in_state, wait,
     )
     return Action(
-        set_growatt_export_limit_pct=ctrl_cfg.growatt_export_limit_pct,
+        set_growatt_export_limit_pct=desired_pct if needs_limit_write else None,
         set_apsystems_pct=ctrl_cfg.start_apsystems_pct,
         enable_apsystems_power_limit=True,
         set_ev_mode="minpv",
@@ -225,19 +240,24 @@ def _regulating(
                 time_in_state, tariff_cfg.min_dwell_seconds,
             )
 
-    # Only rewrite Growatt export limit if not currently active
-    needs_limit_write = not world.growatt_export_limit_active
+    # Rewrite Growatt export limit if enable state or pct differs from desired
+    desired_pct = ctrl_cfg.growatt_export_limit_pct
+    needs_limit_write = (
+        not world.growatt_export_limit_active
+        or world.growatt_export_limit_pct != desired_pct
+    )
     if needs_limit_write:
         logger.info(
-            "regulating: Growatt export limit not active — rewriting to %.0f%%",
-            ctrl_cfg.growatt_export_limit_pct,
+            "regulating: Growatt export limit needs write "
+            "(active=%s, current_pct=%.0f%%, desired_pct=%.0f%%)",
+            world.growatt_export_limit_active,
+            world.growatt_export_limit_pct,
+            desired_pct,
         )
 
     return Action(
         set_apsystems_pct=decision.new_apsystems_pct,
-        set_growatt_export_limit_pct=(
-            ctrl_cfg.growatt_export_limit_pct if needs_limit_write else None
-        ),
+        set_growatt_export_limit_pct=desired_pct if needs_limit_write else None,
         set_ev_mode=None,  # no EV mode change during regulation for v1
         next_state=next_state,
         wait_seconds=ctrl_cfg.period_seconds,
