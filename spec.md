@@ -28,17 +28,17 @@ Regulation is performed on the grid power measurement directly — not on a comp
 
 ## 4. Tariff regimes
 
-The daemon operates in different regimes based on the injection tariff, with awareness that the consumption tariff is approximately 0.15 €/kWh higher than the injection tariff (due to local taxes and distribution costs).
+evcc exposes both the injection tariff (`feedin`) and the consumption tariff (`grid`) explicitly, so the daemon reads them as independent signals rather than deriving one from the other. The consumption tariff is typically higher than the injection tariff (local taxes and distribution costs), but the daemon does not assume any fixed offset.
 
-| Regime | Injection tariff | Daemon action | EV mode |
+| Regime | Condition | Daemon action | EV mode |
 |---|---|---|---|
-| Normal | ≥ 0 €/kWh | No curtailment. APsystems 100%, Growatt export limit off. | Not touched |
-| Mild negative | -0.15 < t < 0 | Curtail generation to target ~200 W export. | `minpv` (Min+Solar) |
-| Deep negative | t ≤ -0.15 | (v2 — deferred) | (v2) |
+| Normal | injection ≥ 0 | No curtailment. APsystems 100%, Growatt export limit off. | Not touched |
+| Mild negative | injection < 0 and consumption ≥ 0 | Curtail generation to target ~200 W export. | `minpv` (Min+Solar) |
+| Deep negative | consumption < 0 | (v2 — deferred) | (v2) |
 
-**v1 implements only Normal and Mild negative.** Deep negative regime (where import is also profitable) is deferred.
+**v1 implements only Normal and Mild negative.** Deep negative regime — defined as the situation where the consumption price itself is negative, so importing energy is also profitable — is deferred. However for now this should be considered identical to Mild negative.
 
-**Hysteresis on tariff transitions:** enter curtailment when tariff < -0.005 €/kWh; exit when tariff ≥ 0. Minimum dwell time in curtailment: 10 minutes. This prevents oscillation around the zero crossing.
+**Hysteresis on tariff transitions:** enter curtailment when injection tariff < 0 €/kWh; exit when injection tariff ≥ 0.005 €/kWh. Minimum dwell time in curtailment: 10 minutes. This prevents oscillation around the zero crossing.
 
 ## 5. Control law
 
