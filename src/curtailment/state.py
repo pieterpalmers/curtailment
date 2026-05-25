@@ -211,10 +211,13 @@ def _regulating(
         world.growatt_export_limit_active,
     )
 
+    # account for battery power when calculating effective PV power delivered by growatt to grid
+    effective_growatt_pv = max(0, world.growatt_pv_power - max(0, world.battery_power))
+
     # Run the controller to get the APsystems decision
     ctrl_input = ControlInput(
         grid_power=world.grid_power,
-        growatt_pv_power=world.growatt_pv_power,
+        growatt_pv_power=effective_growatt_pv,
         current_apsystems_pct=world.current_apsystems_pct,
     )
     decision = compute_decision(ctrl_input, ctrl_cfg)

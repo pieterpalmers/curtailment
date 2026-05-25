@@ -15,17 +15,18 @@ evcc:
   tariff_field: value
 
 control:
-  period_seconds: 30
+  period_seconds: 120
   sample_count: 2
   sample_interval_seconds: 1
 
-  export_setpoint_watts: -200
+  export_setpoint_watts: -300
   deadband_watts: 100
-  step_up_pct: 5
-  step_down_pct: 10
+  step_up_pct: 10
+  step_down_pct: 20
 
-  growatt_pinned_threshold_watts: 100
-  growatt_export_limit_pct: 5
+  growatt_pinned_threshold_watts_low: 200
+  growatt_pinned_threshold_watts_high: 2000
+  growatt_export_limit_pct: 7
   start_apsystems_pct: 50
   growatt_mode_change_wait_seconds: 120
 

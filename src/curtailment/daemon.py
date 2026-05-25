@@ -21,6 +21,9 @@ logger = logging.getLogger("curtailment")
 FAIL_SOURCES = ["growatt", "apsystems", "evcc"]
 FAIL_THRESHOLD = 3
 
+READ_RETRY_COUNT = 3
+READ_RETRY_DELAY_S = 5
+
 
 class Daemon:
     """Main daemon that runs the curtailment control loop."""
@@ -69,12 +72,24 @@ class Daemon:
         cycle_start = time.monotonic()
         time_in_state = cycle_start - self._state_start
 
-        try:
-            world = self._read_world()
-        except Exception as e:
-            logger.warning("Failed to read world state: %s — retrying next cycle", e)
-            time.sleep(self.cfg.control.period_seconds)
-            return
+        for attempt in range(READ_RETRY_COUNT):
+            try:
+                world = self._read_world()
+                break
+            except Exception as e:
+                if attempt < READ_RETRY_COUNT - 1:
+                    logger.warning(
+                        "Failed to read world state: %s — retry %d/%d in %ds",
+                        e, attempt + 1, READ_RETRY_COUNT - 1, READ_RETRY_DELAY_S,
+                    )
+                    time.sleep(READ_RETRY_DELAY_S)
+                else:
+                    logger.warning(
+                        "Failed to read world state after %d attempts: %s — skipping cycle",
+                        READ_RETRY_COUNT, e,
+                    )
+                    time.sleep(self.cfg.control.period_seconds)
+                    return
 
         state_value: State = self._state  # type: ignore
         action: Action = decide_action(state_value, world, self.cfg, time_in_state)

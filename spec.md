@@ -246,7 +246,7 @@ Single YAML file. Key sections:
 - `growatt`: host, port
 - `apsystems`: host, ecu_port, inv_port (and inv_host if different)
 - `evcc`: base_url, ev_loadpoint_id, default_ev_mode
-- `control`: period_seconds, sample_count, sample_interval_seconds, export_setpoint_watts, deadband_watts, step_up_pct, step_down_pct, growatt_pinned_threshold_watts, growatt_export_limit_pct, start_apsystems_pct, growatt_mode_change_wait_seconds
+- `control`: period_seconds, sample_count, sample_interval_seconds, export_setpoint_watts, deadband_watts, step_up_pct, step_down_pct, growatt_pinned_threshold_watts_low, growatt_pinned_threshold_watts_high, growatt_export_limit_pct, start_apsystems_pct, growatt_mode_change_wait_seconds
 - `tariff`: enter_threshold, exit_threshold, deep_negative_threshold (unused in v1), min_dwell_seconds
 - `logging`: level, format, file
 

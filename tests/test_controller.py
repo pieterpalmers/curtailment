@@ -27,7 +27,7 @@ def test_over_exporting():
 def test_hold():
     cfg = ControlConfig(
         export_setpoint_watts=-200, deadband_watts=50,
-        growatt_pinned_threshold_watts=100,
+        growatt_pinned_threshold_watts_low=100,
     )
     inp = ControlInput(
         grid_power=-220, growatt_pv_power=5000,
@@ -40,7 +40,7 @@ def test_hold():
 def test_pinned_low():
     cfg = ControlConfig(
         export_setpoint_watts=-200, deadband_watts=50,
-        growatt_pinned_threshold_watts=100, step_down_pct=10,
+        growatt_pinned_threshold_watts_low=100, step_down_pct=10,
     )
     inp = ControlInput(
         grid_power=-220, growatt_pv_power=50,

@@ -47,7 +47,8 @@ class ControlConfig:
     step_up_pct: float = 5
     step_down_pct: float = 10
 
-    growatt_pinned_threshold_watts: float = 100
+    growatt_pinned_threshold_watts_low: float = 100
+    growatt_pinned_threshold_watts_high: float = 1000
     growatt_export_limit_pct: float = 5
     start_apsystems_pct: int = 50
     growatt_mode_change_wait_seconds: int = 120
@@ -163,7 +164,8 @@ def _parse_control(raw: dict[str, Any]) -> ControlConfig:
         deadband_watts=raw.get("deadband_watts", 100),
         step_up_pct=raw.get("step_up_pct", 5),
         step_down_pct=raw.get("step_down_pct", 10),
-        growatt_pinned_threshold_watts=raw.get("growatt_pinned_threshold_watts", 100),
+        growatt_pinned_threshold_watts_low=raw.get("growatt_pinned_threshold_watts_low", 100),
+        growatt_pinned_threshold_watts_high=raw.get("growatt_pinned_threshold_watts_high", 1000),
         growatt_export_limit_pct=raw.get("growatt_export_limit_pct", 5),
         start_apsystems_pct=raw.get("start_apsystems_pct", 50),
         growatt_mode_change_wait_seconds=raw.get("growatt_mode_change_wait_seconds", 120),
