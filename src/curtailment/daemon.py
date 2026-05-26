@@ -45,6 +45,7 @@ class Daemon:
         self._state_start: float = 0.0
         self._fail_counts: dict[str, int] = {src: 0 for src in FAIL_SOURCES}
         self._fail_logged: dict[str, bool] = {src: False for src in FAIL_SOURCES}
+        self._grid_power_samples: list[float] = []
 
     def run(self) -> None:
         """Main loop. Runs until SIGTERM/SIGINT."""
@@ -106,7 +107,7 @@ class Daemon:
                 "state": self._state.value if self._state else "none",  # type: ignore
                 "injection_tariff": world.injection_tariff,
                 "consumption_tariff": world.consumption_tariff,
-                "grid_power_smoothed": world.grid_power,
+                "grid_power_avg": world.grid_power,
                 "grid_power_raw": world.grid_power_raw,
                 "growatt_pv_power": world.growatt_pv_power,
                 "battery_power": world.battery_power,
@@ -128,11 +129,34 @@ class Daemon:
             self._state = action.next_state
             self._state_start = time.monotonic()
 
-        # Wait
+        # Wait — sample grid power throughout the idle period
         elapsed = time.monotonic() - cycle_start
-        wait = max(1, action.wait_seconds - int(elapsed))
-        if not self._shutdown and wait > 0:
-            time.sleep(wait)
+        wait = max(0.0, action.wait_seconds - elapsed)
+        self._sample_grid_power_during_wait(wait)
+
+    def _sample_grid_power_during_wait(self, duration_seconds: float) -> None:
+        """Sample grid power at regular intervals while waiting for the next cycle."""
+        if duration_seconds <= 0 or self._shutdown:
+            return
+
+        interval = self.cfg.control.grid_sample_interval_seconds
+        deadline = time.monotonic() + duration_seconds
+
+        while not self._shutdown:
+            try:
+                sample = self.growatt.read_grid_power()
+                self._grid_power_samples.append(sample)
+            except Exception as e:
+                logger.debug("Grid power sample skipped during wait: %s", e)
+
+            now = time.monotonic()
+            next_sample_at = now + interval
+            if next_sample_at >= deadline:
+                remaining = deadline - now
+                if remaining > 0 and not self._shutdown:
+                    time.sleep(remaining)
+                break
+            time.sleep(interval)
 
     def read_world(self) -> WorldState:
         """Public method to read world state. Used by scripts."""
@@ -150,13 +174,17 @@ class Daemon:
         consumption_tariff = self._read_evcc_consumption_tariff()
         ev_mode = self._read_evcc_loadpoint_mode()
 
-        # Read Growatt with median sampling
-        grid_power_raw = self.growatt.read_grid_power()
-        grid_power = sample_median(
-            self.growatt.read_grid_power,
-            count=ctrl_cfg.sample_count,
-            interval_seconds=ctrl_cfg.sample_interval_seconds,
-        )
+        # Grid power: consume samples accumulated during the previous wait period.
+        # On the first cycle the buffer is empty — fall back to a direct read.
+        if self._grid_power_samples:
+            grid_power_raw = self._grid_power_samples[-1]
+            grid_power = sum(self._grid_power_samples) / len(self._grid_power_samples)
+            self._grid_power_samples.clear()
+        else:
+            val = self.growatt.read_grid_power()
+            grid_power_raw = val
+            grid_power = val
+
         pv_power = sample_median(
             self.growatt.read_pv_power,
             count=ctrl_cfg.sample_count,

@@ -27,7 +27,7 @@ class WorldState:
 
     injection_tariff: float  # €/kWh, can be negative — drives v1 state transitions
     consumption_tariff: float  # €/kWh — logged, not branched on in v1
-    grid_power: float  # smoothed, watts. positive=import, negative=export
+    grid_power: float  # averaged over the wait period, watts. positive=import, negative=export
     grid_power_raw: float  # last instantaneous sample, for logging
     growatt_pv_power: float  # smoothed, watts
     battery_power: float  # watts. positive=charging — logged, not used in v1

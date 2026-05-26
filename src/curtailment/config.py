@@ -41,6 +41,7 @@ class ControlConfig:
     period_seconds: int = 30
     sample_count: int = 6
     sample_interval_seconds: int = 5
+    grid_sample_interval_seconds: int = 5
 
     export_setpoint_watts: float = -200
     deadband_watts: float = 100
@@ -160,6 +161,7 @@ def _parse_control(raw: dict[str, Any]) -> ControlConfig:
         period_seconds=raw.get("period_seconds", 30),
         sample_count=raw.get("sample_count", 6),
         sample_interval_seconds=raw.get("sample_interval_seconds", 5),
+        grid_sample_interval_seconds=raw.get("grid_sample_interval_seconds", 5),
         export_setpoint_watts=raw.get("export_setpoint_watts", -200),
         deadband_watts=raw.get("deadband_watts", 100),
         step_up_pct=raw.get("step_up_pct", 5),

@@ -55,7 +55,7 @@ def compute_decision(inp: ControlInput, cfg: ControlConfig) -> ControlDecision:
         over_exporting, under_exporting, on_target, growatt_high_pv, growatt_low_pv,
     )
 
-    if over_exporting and not growatt_high_pv:
+    if over_exporting and growatt_low_pv:
         # Exporting too much (grid power too negative) and Growatt can't regulate anymore
         # → reduce APsystems output
 
@@ -69,8 +69,8 @@ def compute_decision(inp: ControlInput, cfg: ControlConfig) -> ControlDecision:
             reason="over_export",
         )
 
-    if under_exporting and not growatt_low_pv:
-        # Not exporting enough → increase APsystems output
+    if under_exporting and growatt_high_pv:
+        # Not exporting enough and Growatt at max → increase APsystems output
         new_pct = min(100, inp.current_apsystems_pct + int(cfg.step_up_pct))
         logger.info(
             "controller decision: under-export → raise apsystems %d%% → %d%% (step_up=%.0f%%)",
@@ -108,11 +108,18 @@ def compute_decision(inp: ControlInput, cfg: ControlConfig) -> ControlDecision:
             reason="pinned_low",
         )
 
-    # On target, Growatt mid-range → hold
-    logger.info(
-        "controller decision: on-target and growatt mid-range → hold apsystems at %d%%",
-        inp.current_apsystems_pct,
-    )
+    if not on_target:
+        # On target, Growatt mid-range → hold
+        logger.warning(
+            "controller decision: fallthrough but not on_target? → hold apsystems at %d%%",
+            inp.current_apsystems_pct,
+        )
+    else:
+        # On target, Growatt mid-range → hold
+        logger.info(
+            "controller decision: on-target and growatt mid-range → hold apsystems at %d%%",
+            inp.current_apsystems_pct,
+        )
     return ControlDecision(
         new_apsystems_pct=inp.current_apsystems_pct,
         reason="hold",
