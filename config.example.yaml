@@ -25,7 +25,7 @@ control:
   step_up_pct: 10
   step_down_pct: 20
 
-  growatt_pinned_threshold_watts_low: 100
+  growatt_pinned_threshold_watts_low: 500
   growatt_pinned_threshold_watts_high: 2000
   growatt_export_limit_pct: 3
   start_apsystems_pct: 50

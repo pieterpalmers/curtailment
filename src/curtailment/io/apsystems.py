@@ -117,6 +117,14 @@ class APSystemsClient:
         if result.isError():
             raise ConnectionError(f"Modbus write error at power_limit: {result}")
         self._last_written_pct = pct
+
+        # disable the inverters if the ask is 0pct
+        result = self._ecu_client.write_registers(  # type: ignore
+            MODBUS_CONNECTED_REGISTER, [0 if value <= 0.01 else 1], device_id=SLAVE_ID
+        )
+        if result.isError():
+            raise ConnectionError(f"Modbus write error at conn_enable: {result}")
+
         logger.info("APSystems power limit set to %s%% (register value %s)", pct, value)
 
     def enable_power_limit(self) -> None:

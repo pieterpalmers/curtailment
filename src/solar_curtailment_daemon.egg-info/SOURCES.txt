@@ -10,7 +10,6 @@ src/curtailment/io/__init__.py
 src/curtailment/io/apsystems.py
 src/curtailment/io/evcc.py
 src/curtailment/io/growatt.py
-src/curtailment/io/modbus_reader.py
 src/curtailment/util/__init__.py
 src/curtailment/util/logging.py
 src/curtailment/util/smoothing.py
@@ -21,6 +20,7 @@ src/solar_curtailment_daemon.egg-info/requires.txt
 src/solar_curtailment_daemon.egg-info/top_level.txt
 tests/test_config.py
 tests/test_controller.py
+tests/test_daemon.py
 tests/test_io_apsystems.py
 tests/test_io_evcc.py
 tests/test_io_growatt.py

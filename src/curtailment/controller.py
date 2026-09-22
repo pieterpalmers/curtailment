@@ -69,8 +69,8 @@ def compute_decision(inp: ControlInput, cfg: ControlConfig) -> ControlDecision:
             reason="over_export",
         )
 
-    if under_exporting and growatt_high_pv:
-        # Not exporting enough and Growatt at max → increase APsystems output
+    if under_exporting:
+        # Not exporting enough → increase APsystems output
         new_pct = min(100, inp.current_apsystems_pct + int(cfg.step_up_pct))
         logger.info(
             "controller decision: under-export → raise apsystems %d%% → %d%% (step_up=%.0f%%)",
@@ -81,13 +81,13 @@ def compute_decision(inp: ControlInput, cfg: ControlConfig) -> ControlDecision:
             reason="under_export",
         )
 
-    if on_target and growatt_high_pv:
+    if on_target and not growatt_low_pv:
         # Growatt is well above its export cap — reliable fixed contributor.
         # Keep pushing APsystems up; over-export protection will catch any overshoot.
         new_pct = min(100, inp.current_apsystems_pct + int(cfg.step_up_pct))
         logger.info(
             "controller decision: on-target, growatt high pv (%.0fW >= %.0fW) → raise apsystems %d%% → %d%%",
-            inp.growatt_pv_power, cfg.growatt_pinned_threshold_watts_high,
+            inp.growatt_pv_power, cfg.growatt_pinned_threshold_watts_low,
             inp.current_apsystems_pct, new_pct,
         )
         return ControlDecision(
@@ -95,21 +95,21 @@ def compute_decision(inp: ControlInput, cfg: ControlConfig) -> ControlDecision:
             reason="growatt_high_pv",
         )
 
-    if on_target and growatt_low_pv:
-        # Growatt effective PV near zero — lower APsystems to avoid over-export if PV recovers
-        new_pct = max(0, inp.current_apsystems_pct - int(cfg.step_down_pct))
-        logger.info(
-            "controller decision: on-target, growatt low pv (%.0fW < %.0fW) → lower apsystems %d%% → %d%%",
-            inp.growatt_pv_power, cfg.growatt_pinned_threshold_watts_low,
-            inp.current_apsystems_pct, new_pct,
-        )
-        return ControlDecision(
-            new_apsystems_pct=new_pct,
-            reason="pinned_low",
-        )
+    # if on_target and growatt_low_pv:
+    #     # Growatt effective PV near zero — lower APsystems to avoid over-export if PV recovers
+    #     new_pct = max(0, inp.current_apsystems_pct - int(cfg.step_down_pct))
+    #     logger.info(
+    #         "controller decision: on-target, growatt low pv (%.0fW < %.0fW) → lower apsystems %d%% → %d%%",
+    #         inp.growatt_pv_power, cfg.growatt_pinned_threshold_watts_low,
+    #         inp.current_apsystems_pct, new_pct,
+    #     )
+    #     return ControlDecision(
+    #         new_apsystems_pct=new_pct,
+    #         reason="pinned_low",
+    #     )
 
     if not on_target:
-        # On target, Growatt mid-range → hold
+        # not on target, Growatt mid-range → hold
         logger.warning(
             "controller decision: fallthrough but not on_target? → hold apsystems at %d%%",
             inp.current_apsystems_pct,
