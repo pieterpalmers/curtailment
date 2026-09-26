@@ -1,6 +1,7 @@
 [Unit]
 Description=Solar Curtailment Daemon
-After=network.target
+After=network.target evcc.service
+Wants=evcc.service
 
 [Service]
 Type=simple
