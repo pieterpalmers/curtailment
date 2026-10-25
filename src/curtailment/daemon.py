@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import signal
 import sys
+import threading
 import time
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -46,10 +48,18 @@ class Daemon:
         self._fail_counts: dict[str, int] = {src: 0 for src in FAIL_SOURCES}
         self._fail_logged: dict[str, bool] = {src: False for src in FAIL_SOURCES}
         self._grid_power_samples: list[float] = []
+        self._status_lock = threading.Lock()
+        self._started_at = time.time()
+        self._last_cycle_at: float | None = None
+        self._last_world: dict | None = None
+        self._last_action: dict | None = None
+        self._last_error: str | None = None
+        self._web = None
 
     def run(self) -> None:
         """Main loop. Runs until SIGTERM/SIGINT."""
         self._install_signal_handlers()
+        self._start_web()
 
         try:
             self._connect_all()
@@ -64,7 +74,42 @@ class Daemon:
         finally:
             self._cleanup_on_shutdown()
             self._disconnect_all()
+            if self._web is not None:
+                self._web.stop()
             logger.info("Daemon stopped")
+
+    def _start_web(self) -> None:
+        web_cfg = getattr(self.cfg, "web", None)
+        if web_cfg is None or not web_cfg.enabled:
+            return
+        from .web import StatusServer
+
+        try:
+            self._web = StatusServer(web_cfg.host, web_cfg.port, self.get_status)
+            self._web.start()
+        except OSError as e:
+            logger.warning("Could not start status web server: %s", e)
+            self._web = None
+
+    def get_status(self) -> dict:
+        """Thread-safe snapshot of daemon state for the status web server."""
+        now = time.time()
+        with self._status_lock:
+            last = self._last_cycle_at
+            daemon = {
+                "state": self._state.value if self._state else "none",
+                "time_in_state_s": round(time.monotonic() - self._state_start) if self._state_start else 0,
+                "uptime_s": round(now - self._started_at),
+                "last_cycle": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last)) if last else "never",
+                "last_cycle_age_s": round(now - last) if last else None,
+                "last_error": self._last_error,
+                "fail_counts": dict(self._fail_counts),
+            }
+            return {
+                "daemon": daemon,
+                "world": dict(self._last_world or {}),
+                "last_action": dict(self._last_action or {}),
+            }
 
     def _run_cycle(self) -> None:
         """Execute one control cycle."""
@@ -90,16 +135,20 @@ class Daemon:
                         "Failed to read world state after %d attempts: %s — skipping cycle",
                         READ_RETRY_COUNT, e,
                     )
+                    with self._status_lock:
+                        self._last_error = f"read world failed: {e}"
                     time.sleep(self.cfg.control.period_seconds)
                     return
 
         state_value: State = self._state  # type: ignore
         action: Action = decide_action(state_value, world, self.cfg, time_in_state)
 
+        exec_error: str | None = None
         try:
             self._execute_action(action)
         except Exception as e:
             logger.warning("Failed to execute action: %s — continuing", e)
+            exec_error = f"execute action failed: {e}"
 
         # Emit per-cycle structured log (spec §13)
         logger.info(
@@ -129,6 +178,14 @@ class Daemon:
             )
             self._state = action.next_state
             self._state_start = time.monotonic()
+
+        with self._status_lock:
+            self._last_cycle_at = time.time()
+            self._last_world = asdict(world)
+            self._last_action = {
+                k: (v.value if hasattr(v, "value") else v) for k, v in asdict(action).items()
+            }
+            self._last_error = exec_error
 
         # Wait — sample grid power throughout the idle period
         elapsed = time.monotonic() - cycle_start

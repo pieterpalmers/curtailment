@@ -40,3 +40,8 @@ tariff:
 logging:
   level: INFO
   format: console
+
+web:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080

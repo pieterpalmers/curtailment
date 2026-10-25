@@ -71,6 +71,13 @@ class LoggingConfig:
 
 
 @dataclass
+class WebConfig:
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8080
+
+
+@dataclass
 class Config:
     growatt: GrowattConfig
     apsystems: APSystemsConfig
@@ -78,6 +85,7 @@ class Config:
     control: ControlConfig
     tariff: TariffConfig
     logging: LoggingConfig
+    web: WebConfig = field(default_factory=WebConfig)
 
     @classmethod
     def from_file(cls, path: str | Path) -> Config:
@@ -96,6 +104,7 @@ class Config:
                 control=_parse_control(raw.get("control", {})),
                 tariff=_parse_tariff(raw.get("tariff", {})),
                 logging=_parse_logging(raw.get("logging", {})),
+                web=_parse_web(raw.get("web", {})),
             )
         except ConfigError:
             raise
@@ -188,6 +197,14 @@ def _parse_logging(raw: dict[str, Any]) -> LoggingConfig:
         level=raw.get("level", "INFO"),
         format=raw.get("format", "json"),
         file=raw.get("file") or None,
+    )
+
+
+def _parse_web(raw: dict[str, Any]) -> WebConfig:
+    return WebConfig(
+        enabled=bool(raw.get("enabled", False)),
+        host=raw.get("host", "0.0.0.0"),
+        port=int(raw.get("port", 8080)),
     )
 
 
