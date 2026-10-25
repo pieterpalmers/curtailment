@@ -317,6 +317,9 @@ class Daemon:
         if action.set_apsystems_pct is not None:
             self.apsystems.set_power_limit(action.set_apsystems_pct)
 
+        if action.disable_apsystems_power_limit:
+            self.apsystems.disable_power_limit()
+
         if action.set_ev_mode is not None:
             self.evcc.set_loadpoint_mode(
                 self.cfg.evcc.ev_loadpoint_id, action.set_ev_mode

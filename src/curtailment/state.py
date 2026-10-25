@@ -45,6 +45,7 @@ class Action:
     disable_growatt_export_limit: bool = False
     set_apsystems_pct: int | None = None
     enable_apsystems_power_limit: bool = False
+    disable_apsystems_power_limit: bool = False
     set_ev_mode: str | None = None
     next_state: State = State.IDLE
     wait_seconds: int = 30
@@ -283,6 +284,7 @@ def _exiting(
     return Action(
         disable_growatt_export_limit=True,
         set_apsystems_pct=100,
+        disable_apsystems_power_limit=True,
         set_ev_mode=restore_ev,
         next_state=State.IDLE,
         wait_seconds=ctrl_cfg.period_seconds,

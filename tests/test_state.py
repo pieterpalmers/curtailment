@@ -148,3 +148,11 @@ def test_regulating_does_not_rewrite_growatt_when_active():
     world = _world(injection_tariff=-0.01, growatt_export_limit_active=True)
     action = decide_action(State.REGULATING, world, cfg, 100)
     assert action.set_growatt_export_limit_pct is None
+
+
+def test_exiting_disables_apsystems_power_limit():
+    cfg = _cfg()
+    world = _world(injection_tariff=0.05, growatt_export_limit_active=True, growatt_export_limit_pct=5)
+    action = decide_action(State.EXITING_CURTAILMENT, world, cfg, 0)
+    assert action.set_apsystems_pct == 100
+    assert action.disable_apsystems_power_limit is True
