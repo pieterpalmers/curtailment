@@ -12,15 +12,44 @@ from typing import Any, Callable
 logger = logging.getLogger("curtailment.web")
 
 
+def _cell(v: Any) -> str:
+    if isinstance(v, dict):
+        return "<br>".join(f"{html.escape(str(k))}: {html.escape(str(x))}" for k, x in v.items())
+    return html.escape(str(v))
+
+
+def _table(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "<em>none</em>"
+    cols = list(items[0])
+    head = "".join(f"<th>{html.escape(c)}</th>" for c in cols)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{_cell(it.get(c, ''))}</td>" for c in cols) + "</tr>" for it in items
+    )
+    return f'<table class="sub"><tr>{head}</tr>{body}</table>'
+
+
 def _render_html(status: dict[str, Any]) -> str:
+    banner = ""
+    bridge = status.get("evcc_bridge")
+    if isinstance(bridge, dict):
+        warn = bridge.get("vpp_mismatch") or bridge.get("last_error")
+        banner = (
+            f'<div class="banner"><b>Battery: {html.escape(str(bridge.get("active")))}</b>'
+            f' &mdash; {html.escape(str(bridge.get("decision")))}'
+            + (f'<div class="warn">{html.escape(str(warn))}</div>' if warn else "")
+            + "</div>"
+        )
     rows = []
     for section, values in status.items():
         rows.append(f'<tr><th colspan="2" class="sec">{html.escape(section)}</th></tr>')
         if isinstance(values, dict):
             for k, v in values.items():
-                rows.append(
-                    f"<tr><td>{html.escape(str(k))}</td><td>{html.escape(str(v))}</td></tr>"
-                )
+                if isinstance(v, list) and all(isinstance(x, dict) for x in v):
+                    cell = _table(v)
+                else:
+                    cell = _cell(v)
+                rows.append(f"<tr><td>{html.escape(str(k))}</td><td>{cell}</td></tr>")
         else:
             rows.append(f'<tr><td colspan="2">{html.escape(str(values))}</td></tr>')
     return f"""<!doctype html>
@@ -30,10 +59,14 @@ def _render_html(status: dict[str, Any]) -> str:
 <style>
 body{{font-family:sans-serif;margin:1em}}
 table{{border-collapse:collapse}}
-td,th{{padding:3px 10px;border-bottom:1px solid #ddd;text-align:left}}
+td,th{{padding:3px 10px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
 th.sec{{background:#eee}}
+table.sub td,table.sub th{{font-size:90%;padding:2px 6px}}
+.banner{{padding:8px 12px;margin-bottom:1em;background:#eef5ff;border-left:4px solid #48c}}
+.warn{{color:#b00;margin-top:4px}}
 </style></head><body>
 <h1>Curtailment daemon</h1>
+{banner}
 <table>{''.join(rows)}</table>
 <p><a href="/status.json">status.json</a> &middot; auto-refresh 5s</p>
 </body></html>"""

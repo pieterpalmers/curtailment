@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from enum import Enum
 from typing import TYPE_CHECKING, Callable
 
@@ -36,6 +37,11 @@ REG_AC_CHARGE_ENABLE = 30410
 
 LIVENESS_CHECK_INTERVAL_S = 30
 LIVENESS_TIMEOUT_S = 5
+HISTORY_LEN = 50
+
+# Read back after each apply/refresh so the status page shows what the
+# inverter actually holds, not just what we wrote.
+READBACK_REGS = (REG_REMOTE_ENABLE, REG_REMOTE_DURATION_MIN, REG_REMOTE_RATE_PCT, REG_AC_CHARGE_ENABLE)
 
 
 class BatteryMode(Enum):
@@ -94,6 +100,17 @@ class EvccBatteryBridge:
         self.evcc_alive = True
         self.last_error: str | None = None
 
+        # Introspection for the status page
+        self.control_authority: int | None = None
+        self.decision = "not polled yet"
+        self._raw: tuple[int, int] | None = None
+        self._last_poll: float | None = None
+        self._readback: dict[int, int] = {}
+        self._readback_at: float | None = None
+        self._readback_error: str | None = None
+        self._history: deque[dict] = deque(maxlen=HISTORY_LEN)
+        self._history_lock = threading.Lock()
+
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -132,7 +149,9 @@ class EvccBatteryBridge:
             logger.warning("evcc bridge: could not read control authority (%d): %s",
                            REG_CONTROL_AUTHORITY, e)
             return
+        self.control_authority = value
         if value != 1:
+            self._event("control authority", f"{REG_CONTROL_AUTHORITY}={value}, expected 1")
             logger.error(
                 "evcc bridge: VPP control authority register %d is %d, expected 1 "
                 "— battery commands will be ignored by the inverter",
@@ -143,6 +162,8 @@ class EvccBatteryBridge:
 
     def poll_once(self) -> None:
         now = self._clock()
+        self._last_poll = now
+        kept = self.active.value if self.active else "none"
 
         try:
             with self.growatt.lock:
@@ -152,37 +173,56 @@ class EvccBatteryBridge:
             # Never treat a failed read as a state change; the VPP timer covers outages.
             logger.warning("evcc bridge: register read failed: %s", e)
             self.last_error = f"read failed: {e}"
+            self.decision = f"register read failed, keeping {kept}"
+            self._event("read failed", str(e))
             return
 
-        seen = mode_from_registers(battery_first, ac_charge)
+        self._raw = (battery_first, ac_charge)
+        requested = mode_from_registers(battery_first, ac_charge)
+        regs = f"evcc requests {requested.value} ({REG_BATTERY_FIRST}={battery_first}, {REG_AC_CHARGE}={ac_charge})"
+        seen = requested
         if not self._is_evcc_alive(now):
             seen = BatteryMode.NORMAL
+            regs += f"; evcc unreachable for {now - self._last_alive_ok:.0f}s, forcing normal"
 
         # Debounce: act only on two consecutive identical readings. Filters the
         # intermediate state between evcc's separate 1102 and 1092 writes.
         stable = seen if seen == self._last_seen else None
         self._last_seen = seen
 
-        if stable is not None and stable != self.active:
+        if stable is None:
+            self.decision = f"{regs}; first reading of {seen.value}, waiting for a second one (debounce)"
+            return
+
+        if stable != self.active:
             try:
-                self._apply(stable)
+                writes = self._apply(stable)
             except Exception as e:
                 logger.warning("evcc bridge: applying %s failed: %s", stable.value, e)
                 self.last_error = f"apply {stable.value} failed: {e}"
+                self.decision = f"{regs}; applying {stable.value} failed, keeping {kept}"
+                self._event("apply failed", f"{stable.value}: {e}")
                 return
             logger.info(
                 "evcc bridge: battery mode %s → %s",
                 self.active.value if self.active else "none", stable.value,
             )
+            self._event(f"{kept} → {stable.value}", f"{regs}; wrote {_fmt_writes(writes)}")
             self.active = stable
             self._last_refresh = now
             self.last_error = None
+            self.decision = f"{regs}; applied {stable.value}: {_fmt_writes(writes)}"
+            self._read_back(now)
             return
 
-        if (
-            self.active in (BatteryMode.HOLD, BatteryMode.CHARGE)
-            and now - self._last_refresh >= self.cfg.refresh_interval_s
-        ):
+        if self.active == BatteryMode.NORMAL:
+            self.decision = f"{regs}; normal active, VPP remote control off, inverter decides"
+            if self._readback_at is None or now - self._readback_at >= self.cfg.refresh_interval_s:
+                self._read_back(now)
+            return
+
+        since = now - self._last_refresh
+        if since >= self.cfg.refresh_interval_s:
             try:
                 # Re-arm the VPP fail-safe timer. If the inverter turns out not to
                 # restart the countdown on a 30408-only write, re-send the full
@@ -190,17 +230,27 @@ class EvccBatteryBridge:
                 self.growatt.write_holding(REG_REMOTE_DURATION_MIN, self.cfg.vpp_timer_min)
                 self._last_refresh = now
                 self.last_error = None
+                self.decision = f"{regs}; {self.active.value} active, re-armed VPP timer ({REG_REMOTE_DURATION_MIN}={self.cfg.vpp_timer_min})"
             except Exception as e:
                 logger.warning("evcc bridge: timer refresh failed: %s", e)
                 self.last_error = f"refresh failed: {e}"
+                self.decision = f"{regs}; {self.active.value} active, timer refresh failed"
+                self._event("refresh failed", str(e))
+            self._read_back(now)
+            return
 
-    def _apply(self, mode: BatteryMode) -> None:
-        """Write the VPP sequence for `mode`.
+        self.decision = (
+            f"{regs}; {self.active.value} active, next timer re-arm in "
+            f"{self.cfg.refresh_interval_s - since:.0f}s"
+        )
+
+    def _apply(self, mode: BatteryMode) -> list[tuple[int, int]]:
+        """Write the VPP sequence for `mode` and return the writes made.
 
         Hold/charge switches do not write 30407=0 first, to avoid a window where
         the battery is uncontrolled.
         """
-        g = self.growatt
+        g = _RecordingWriter(self.growatt)
         t = self.cfg.vpp_timer_min
         with g.lock:
             if mode == BatteryMode.NORMAL:
@@ -216,6 +266,33 @@ class EvccBatteryBridge:
                 g.write_holding(REG_REMOTE_DURATION_MIN, t)
                 g.write_holding(REG_REMOTE_RATE_PCT, self.cfg.charge_rate_pct)
                 g.write_holding(REG_REMOTE_ENABLE, 1)
+        return g.writes
+
+    def _read_back(self, now: float) -> None:
+        try:
+            with self.growatt.lock:
+                values = {reg: self.growatt.read_holding(reg) for reg in READBACK_REGS}
+        except Exception as e:
+            self._readback_error = str(e)
+            return
+        self._readback = values
+        self._readback_at = now
+        self._readback_error = None
+
+    def _expected_vpp(self) -> dict[int, int]:
+        if self.active == BatteryMode.NORMAL:
+            return {REG_REMOTE_ENABLE: 0}
+        if self.active == BatteryMode.HOLD:
+            return {REG_REMOTE_ENABLE: 1, REG_REMOTE_RATE_PCT: self.cfg.hold_rate_pct}
+        if self.active == BatteryMode.CHARGE:
+            return {REG_REMOTE_ENABLE: 1, REG_REMOTE_RATE_PCT: self.cfg.charge_rate_pct,
+                    REG_AC_CHARGE_ENABLE: 1}
+        return {}
+
+    def _event(self, event: str, detail: str) -> None:
+        entry = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "event": event, "detail": detail}
+        with self._history_lock:
+            self._history.appendleft(entry)
 
     def _is_evcc_alive(self, now: float) -> bool:
         if self._last_alive_check is None or now - self._last_alive_check >= LIVENESS_CHECK_INTERVAL_S:
@@ -226,7 +303,9 @@ class EvccBatteryBridge:
         if alive != self.evcc_alive:
             if alive:
                 logger.info("evcc bridge: evcc is reachable again")
+                self._event("evcc alive", "evcc is reachable again")
             else:
+                self._event("evcc dead", f"no response for {self.cfg.evcc_dead_after_s}s, forcing normal")
                 logger.warning(
                     "evcc bridge: evcc unreachable for %ss — forcing battery mode normal",
                     self.cfg.evcc_dead_after_s,
@@ -235,9 +314,75 @@ class EvccBatteryBridge:
         return alive
 
     def status(self) -> dict:
+        now = self._clock()
+
+        def age(t: float | None) -> int | None:
+            return None if t is None else round(now - t)
+
+        readback = {f"{reg} {_REG_NAMES[reg]}": _signed16(v) if reg == REG_REMOTE_RATE_PCT else v
+                    for reg, v in self._readback.items()}
+        mismatch = [
+            f"{reg} is {_signed16(self._readback[reg])}, expected {want}"
+            for reg, want in self._expected_vpp().items()
+            if reg in self._readback and _signed16(self._readback[reg]) != want
+        ]
+        in_vpp = self.active in (BatteryMode.HOLD, BatteryMode.CHARGE)
+        with self._history_lock:
+            history = list(self._history)
         return {
             "active": self.active.value if self.active else "none",
+            "decision": self.decision,
+            "evcc_requests": mode_from_registers(*self._raw).value if self._raw else "unknown",
+            "legacy_registers": (
+                f"{REG_BATTERY_FIRST}={self._raw[0]}, {REG_AC_CHARGE}={self._raw[1]}" if self._raw else "unknown"
+            ),
             "seen": self._last_seen.value if self._last_seen else "none",
+            "last_poll_age_s": age(self._last_poll),
             "evcc_alive": self.evcc_alive,
+            "evcc_last_ok_age_s": age(self._last_alive_ok),
+            "timer_rearm_age_s": age(self._last_refresh) if in_vpp else None,
+            "vpp_readback": readback or "not read yet",
+            "vpp_readback_age_s": age(self._readback_at),
+            "vpp_readback_error": self._readback_error,
+            "vpp_mismatch": "; ".join(mismatch) or None,
+            "control_authority_30100": self.control_authority,
+            "config": (
+                f"poll {self.cfg.poll_interval_s}s, re-arm {self.cfg.refresh_interval_s}s, "
+                f"timer {self.cfg.vpp_timer_min}min, hold +{self.cfg.hold_rate_pct}%, "
+                f"charge +{self.cfg.charge_rate_pct}%, evcc dead after {self.cfg.evcc_dead_after_s}s"
+            ),
             "last_error": self.last_error,
+            "history": history,
         }
+
+
+_REG_NAMES = {
+    REG_REMOTE_ENABLE: "remote enable",
+    REG_REMOTE_DURATION_MIN: "duration min",
+    REG_REMOTE_RATE_PCT: "rate %",
+    REG_AC_CHARGE_ENABLE: "AC charge",
+}
+
+
+def _signed16(v: int) -> int:
+    return v - 0x10000 if v >= 0x8000 else v
+
+
+def _fmt_writes(writes: list[tuple[int, int]]) -> str:
+    return ", ".join(f"{reg}={val}" for reg, val in writes) or "nothing"
+
+
+class _RecordingWriter:
+    """Wraps a GrowattClient and records holding-register writes."""
+
+    def __init__(self, growatt: GrowattClient) -> None:
+        self._g = growatt
+        self.lock = growatt.lock
+        self.writes: list[tuple[int, int]] = []
+
+    def read_holding(self, address: int) -> int:
+        return self._g.read_holding(address)
+
+    def write_holding(self, address: int, value: int) -> None:
+        self._g.write_holding(address, value)
+        self.writes.append((address, value))

@@ -268,3 +268,63 @@ def test_config_defaults_valid():
 def test_config_rejects_invalid(kw):
     with pytest.raises(ConfigError):
         _cfg_with_bridge(**kw).validate()
+
+
+def test_status_explains_debounce_and_transition():
+    b, g, clock, _ = make_bridge({1102: 1, 1092: 1, 30410: 1})
+    b.poll_once()
+    st = b.status()
+    assert st["active"] == "none"
+    assert "debounce" in st["decision"]
+    assert st["legacy_registers"] == "1102=1, 1092=1"
+
+    clock.t += 5
+    b.poll_once()
+    st = b.status()
+    assert st["active"] == "charge"
+    assert "applied charge" in st["decision"]
+    assert st["history"][0]["event"] == "none → charge"
+    assert "30409=100" in st["history"][0]["detail"]
+    assert st["vpp_readback"]["30407 remote enable"] == 1
+    assert st["vpp_mismatch"] is None
+
+
+def test_status_reports_vpp_mismatch_after_inverter_reverts():
+    b, g, clock, _ = make_bridge({1102: 1})
+    poll_twice(b, clock)
+    g.regs[30407] = 0  # inverter dropped remote control on its own
+    clock.t += 30
+    b.poll_once()  # refresh + readback
+    st = b.status()
+    assert "30407 is 0, expected 1" in st["vpp_mismatch"]
+
+
+def test_status_signed_rate_readback():
+    b, g, clock, _ = make_bridge({1102: 1})
+    poll_twice(b, clock)
+    g.regs[30409] = 0xFFFF  # -1 as INT16
+    clock.t += 30
+    b.poll_once()
+    assert b.status()["vpp_readback"]["30409 rate %"] == -1
+
+
+def test_status_logs_read_failure_in_history():
+    b, g, clock, _ = make_bridge({1102: 1})
+    poll_twice(b, clock)
+    g.fail_reads = True
+    clock.t += 5
+    b.poll_once()
+    st = b.status()
+    assert "keeping hold" in st["decision"]
+    assert st["history"][0]["event"] == "read failed"
+
+
+def test_web_renders_bridge_banner_and_history():
+    from curtailment.web import _render_html
+
+    b, g, clock, _ = make_bridge({1102: 1})
+    poll_twice(b, clock)
+    page = _render_html({"evcc_bridge": b.status()})
+    assert "Battery: hold" in page
+    assert "none → hold" in page
+    assert "<table class=\"sub\">" in page

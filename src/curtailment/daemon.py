@@ -127,7 +127,13 @@ class Daemon:
                 "last_action": dict(self._last_action or {}),
             }
         if self._bridge is not None:
-            status["evcc_bridge"] = self._bridge.status()
+            bridge = self._bridge.status()
+            # Battery power from the last control cycle, so the effect of the mode is visible
+            status["evcc_bridge"] = {
+                "active": bridge.pop("active"),
+                "battery_power_w": status["world"].get("battery_power"),
+                **bridge,
+            }
         return status
 
     def _run_cycle(self) -> None:
