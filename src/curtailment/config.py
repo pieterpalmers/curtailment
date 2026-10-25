@@ -78,6 +78,18 @@ class WebConfig:
 
 
 @dataclass
+class EvccBridgeConfig:
+    enabled: bool = False
+    evcc_url: str | None = None  # None -> evcc.base_url
+    poll_interval_s: float = 5
+    refresh_interval_s: float = 30
+    vpp_timer_min: int = 2
+    charge_rate_pct: int = 100
+    hold_rate_pct: int = 1
+    evcc_dead_after_s: float = 120
+
+
+@dataclass
 class Config:
     growatt: GrowattConfig
     apsystems: APSystemsConfig
@@ -86,6 +98,7 @@ class Config:
     tariff: TariffConfig
     logging: LoggingConfig
     web: WebConfig = field(default_factory=WebConfig)
+    evcc_bridge: EvccBridgeConfig = field(default_factory=EvccBridgeConfig)
 
     @classmethod
     def from_file(cls, path: str | Path) -> Config:
@@ -105,6 +118,7 @@ class Config:
                 tariff=_parse_tariff(raw.get("tariff", {})),
                 logging=_parse_logging(raw.get("logging", {})),
                 web=_parse_web(raw.get("web", {})),
+                evcc_bridge=_parse_evcc_bridge(raw.get("evcc_bridge", {})),
             )
         except ConfigError:
             raise
@@ -135,6 +149,17 @@ class Config:
             raise ConfigError("exit_threshold must be > 0 (spec: exit when injection >= 0.005)")
         if self.tariff.min_dwell_seconds < 0:
             raise ConfigError("min_dwell_seconds must be >= 0")
+        bridge = self.evcc_bridge
+        if not 1 <= bridge.charge_rate_pct <= 100:
+            raise ConfigError("evcc_bridge.charge_rate_pct must be in [1, 100]")
+        if not 1 <= bridge.hold_rate_pct <= 100:
+            raise ConfigError("evcc_bridge.hold_rate_pct must be in [1, 100] (0 does not block discharge)")
+        if not 1 <= bridge.vpp_timer_min <= 10:
+            raise ConfigError("evcc_bridge.vpp_timer_min must be in [1, 10]")
+        if bridge.refresh_interval_s >= bridge.vpp_timer_min * 60 / 2:
+            raise ConfigError("evcc_bridge.refresh_interval_s must be < vpp_timer_min * 60 / 2")
+        if bridge.poll_interval_s <= 0:
+            raise ConfigError("evcc_bridge.poll_interval_s must be > 0")
 
 
 def _parse_growatt(raw: dict[str, Any]) -> GrowattConfig:
@@ -205,6 +230,19 @@ def _parse_web(raw: dict[str, Any]) -> WebConfig:
         enabled=bool(raw.get("enabled", False)),
         host=raw.get("host", "0.0.0.0"),
         port=int(raw.get("port", 8080)),
+    )
+
+
+def _parse_evcc_bridge(raw: dict[str, Any]) -> EvccBridgeConfig:
+    return EvccBridgeConfig(
+        enabled=bool(raw.get("enabled", False)),
+        evcc_url=raw.get("evcc_url") or None,
+        poll_interval_s=raw.get("poll_interval_s", 5),
+        refresh_interval_s=raw.get("refresh_interval_s", 30),
+        vpp_timer_min=int(raw.get("vpp_timer_min", 2)),
+        charge_rate_pct=int(raw.get("charge_rate_pct", 100)),
+        hold_rate_pct=int(raw.get("hold_rate_pct", 1)),
+        evcc_dead_after_s=raw.get("evcc_dead_after_s", 120),
     )
 
 

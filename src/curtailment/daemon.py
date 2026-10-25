@@ -55,6 +55,7 @@ class Daemon:
         self._last_action: dict | None = None
         self._last_error: str | None = None
         self._web = None
+        self._bridge = None
 
     def run(self) -> None:
         """Main loop. Runs until SIGTERM/SIGINT."""
@@ -63,6 +64,7 @@ class Daemon:
 
         try:
             self._connect_all()
+            self._start_evcc_bridge()
             self._state = self._reconcile_startup()
             self._state_start = time.monotonic()
 
@@ -73,6 +75,8 @@ class Daemon:
             raise
         finally:
             self._cleanup_on_shutdown()
+            if self._bridge is not None:
+                self._bridge.stop()
             self._disconnect_all()
             if self._web is not None:
                 self._web.stop()
@@ -91,6 +95,18 @@ class Daemon:
             logger.warning("Could not start status web server: %s", e)
             self._web = None
 
+    def _start_evcc_bridge(self) -> None:
+        bridge_cfg = getattr(self.cfg, "evcc_bridge", None)
+        if bridge_cfg is None or not bridge_cfg.enabled:
+            return
+        from .evcc_bridge import EvccBatteryBridge, http_alive_check
+
+        evcc_url = (bridge_cfg.evcc_url or self.cfg.evcc.base_url).rstrip("/")
+        self._bridge = EvccBatteryBridge(
+            bridge_cfg, self.growatt, http_alive_check(evcc_url + "/api/state")
+        )
+        self._bridge.start()
+
     def get_status(self) -> dict:
         """Thread-safe snapshot of daemon state for the status web server."""
         now = time.time()
@@ -105,11 +121,14 @@ class Daemon:
                 "last_error": self._last_error,
                 "fail_counts": dict(self._fail_counts),
             }
-            return {
+            status = {
                 "daemon": daemon,
                 "world": dict(self._last_world or {}),
                 "last_action": dict(self._last_action or {}),
             }
+        if self._bridge is not None:
+            status["evcc_bridge"] = self._bridge.status()
+        return status
 
     def _run_cycle(self) -> None:
         """Execute one control cycle."""

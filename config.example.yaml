@@ -45,3 +45,13 @@ web:
   enabled: true
   host: 0.0.0.0
   port: 8080
+
+evcc_bridge:
+  enabled: false
+  evcc_url: http://evcc.local:7070
+  poll_interval_s: 5
+  refresh_interval_s: 30
+  vpp_timer_min: 2
+  charge_rate_pct: 100     # 1..100, % for 30409 in charge mode
+  hold_rate_pct: 1         # must be >= 1, 0 does not block discharge
+  evcc_dead_after_s: 120

@@ -13,6 +13,7 @@ Register addresses use the same 1-based convention as the reference script:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -45,6 +46,11 @@ class GrowattClient:
         self.timeout = timeout
         self.dry_run = dry_run
         self._client: ModbusTcpClient | None = None
+        # The client is shared between the control loop and the evcc battery
+        # bridge thread. Hold this lock around multi-register sequences so they
+        # are not interleaved; single reads/writes take it internally.
+        self.lock = threading.RLock()
+        self._dry_regs: dict[int, int] = {}
 
     def connect(self) -> None:
         """Connect to the Growatt inverter."""
@@ -110,9 +116,10 @@ class GrowattClient:
             self._limit_pct = pct
             return
         # Order from reference: disable, set power, enable
-        self._write_holding(30200, 0)  # disable first
-        self._write_holding(30201, int(pct))
-        self._write_holding(30200, 1)  # enable
+        with self.lock:
+            self._write_holding(30200, 0)  # disable first
+            self._write_holding(30201, int(pct))
+            self._write_holding(30200, 1)  # enable
         logger.info("Growatt export limit set to %s%%", pct)
 
     def disable_export_limit(self) -> None:
@@ -123,6 +130,20 @@ class GrowattClient:
             return
         self._write_holding(30200, 0)
         logger.info("Growatt export limit disabled")
+
+    def read_holding(self, address: int) -> int:
+        """Read a single holding register. Dry run reads back simulated values."""
+        if self.dry_run:
+            return self._dry_regs.get(address, 0)
+        return self._read_holding(address)
+
+    def write_holding(self, address: int, value: int) -> None:
+        """Write a single holding register. Dry run logs and stores the value."""
+        if self.dry_run:
+            logger.info("dry_run: would write Growatt holding %d = %d", address, value)
+            self._dry_regs[address] = value
+            return
+        self._write_holding(address, value)
 
     def _read_input_int32(self, address: int) -> int:
         """Read a 32-bit signed integer from input registers (high|low)."""
@@ -144,6 +165,10 @@ class GrowattClient:
 
     def _retry_read(self, read_fn, address, count, max_retries=MAX_RETRIES):
         """Retry logic for reads, matching the reference script behavior."""
+        with self.lock:
+            return self._retry_read_locked(read_fn, address, count, max_retries)
+
+    def _retry_read_locked(self, read_fn, address, count, max_retries):
         last_error = None
         for attempt in range(max_retries + 1):
             if attempt > 0:
@@ -161,6 +186,10 @@ class GrowattClient:
 
     def _retry_write(self, write_fn, address, values, max_retries=MAX_RETRIES):
         """Retry logic for writes."""
+        with self.lock:
+            return self._retry_write_locked(write_fn, address, values, max_retries)
+
+    def _retry_write_locked(self, write_fn, address, values, max_retries):
         last_error = None
         for attempt in range(max_retries + 1):
             if attempt > 0:
