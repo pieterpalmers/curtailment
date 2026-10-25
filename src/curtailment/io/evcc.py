@@ -82,14 +82,24 @@ class EvccClient:
         return float(data["rates"][0][self._tariff_field])
 
     def get_loadpoint_mode(self, loadpoint_id: int) -> str:
-        """Returns 'off', 'now', 'minpv', 'pv'. Reads from /api/state."""
+        """Returns 'off', 'now', 'minpv', 'pv'. Reads from /api/state.
+
+        evcc >= 0.3xx reports 'smart' plus an alwaysCharge flag instead of
+        pv/minpv; map that back so callers keep the legacy names. Writing
+        pv/minpv is still accepted by evcc (pv clears alwaysCharge).
+        """
         if self.dry_run:
             return self._last_mode or "pv"
         resp = self._client.get("/api/state")  # type: ignore
         resp.raise_for_status()
         data = resp.json()
         loadpoints = data["result"]["loadpoints"] if "result" in data else data["loadpoints"]
-        return str(loadpoints[loadpoint_id - 1]["mode"])
+        lp = loadpoints[loadpoint_id - 1]
+        mode = str(lp["mode"])
+        if mode == "smart":
+            always = lp.get("alwaysCharge")
+            return "minpv" if always is True or str(always).lower() == "on" else "pv"
+        return mode
 
     def set_loadpoint_mode(self, loadpoint_id: int, mode: str) -> None:
         """Set the loadpoint mode. Uses POST /api/loadpoints/{id}/mode/{mode}."""

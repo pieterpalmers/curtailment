@@ -21,6 +21,11 @@ def setup_logging(level: str = "INFO", fmt: str = "json", log_file: str | None =
     except ImportError:
         _setup_standard_logging(level, log_file)
 
+    # httpx logs every request at INFO; only show it when debugging
+    if level.upper() != "DEBUG":
+        for name in ("httpx", "httpcore"):
+            logging.getLogger(name).setLevel(logging.WARNING)
+
 
 def _setup_structlog(level: str, fmt: str, log_file: str | None) -> None:
     import structlog

@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from curtailment.io.evcc import EvccClient
 
 
@@ -138,3 +140,32 @@ class TestEvccClient:
         mode = client.get_loadpoint_mode(1)
         assert mode == "pv"
         client.set_loadpoint_mode(1, "minpv")  # should not raise
+
+
+@pytest.mark.parametrize(
+    "lp,expected",
+    [
+        ({"mode": "smart", "alwaysCharge": "on"}, "minpv"),
+        ({"mode": "smart", "alwaysCharge": True}, "minpv"),
+        ({"mode": "smart", "alwaysCharge": "off"}, "pv"),
+        ({"mode": "smart"}, "pv"),
+        ({"mode": "now", "alwaysCharge": "on"}, "now"),
+    ],
+)
+def test_get_loadpoint_mode_maps_smart_always_charge(lp, expected):
+    with patch("httpx.Client"):
+        client = EvccClient("http://localhost:7070")
+    client._client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"result": {"loadpoints": [lp]}}
+    client._client.get.return_value = mock_resp
+    assert client.get_loadpoint_mode(1) == expected
+
+
+def test_setup_logging_quiets_httpx():
+    import logging
+
+    from curtailment.util.logging import setup_logging
+
+    setup_logging("INFO", "console")
+    assert logging.getLogger("httpx").getEffectiveLevel() == logging.WARNING
