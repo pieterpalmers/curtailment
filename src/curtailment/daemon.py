@@ -62,6 +62,7 @@ class Daemon:
             logger.exception("Fatal error in daemon")
             raise
         finally:
+            self._cleanup_on_shutdown()
             self._disconnect_all()
             logger.info("Daemon stopped")
 
@@ -324,6 +325,38 @@ class Daemon:
             self.evcc.set_loadpoint_mode(
                 self.cfg.evcc.ev_loadpoint_id, action.set_ev_mode
             )
+
+    def _cleanup_on_shutdown(self) -> None:
+        """Restore uncurtailed defaults if stopping while curtailment may be active."""
+        from .state import Action, State
+
+        if self._state is None or self._state == State.IDLE:
+            return
+
+        logger.info("Shutdown in state %s — restoring uncurtailed defaults", self._state.value)
+        restore_ev = None
+        try:
+            if self._read_evcc_loadpoint_mode() == "minpv":
+                restore_ev = self.cfg.evcc.default_ev_mode
+        except Exception as e:
+            logger.warning("Could not read EV mode during shutdown cleanup: %s", e)
+
+        # Run each step independently so one failing device doesn't block the others
+        steps = [
+            ("growatt export limit", lambda: self._execute_action(
+                Action(disable_growatt_export_limit=True))),
+            ("apsystems power limit", lambda: self._execute_action(
+                Action(set_apsystems_pct=100, disable_apsystems_power_limit=True))),
+        ]
+        if restore_ev is not None:
+            steps.append(("ev mode", lambda: self._execute_action(
+                Action(set_ev_mode=restore_ev))))
+        for name, step in steps:
+            try:
+                step()
+            except Exception as e:
+                logger.error("Shutdown cleanup failed for %s: %s", name, e)
+        self._state = State.IDLE
 
     def _reconcile_startup(self) -> State:
         """Determine initial state from external system state. Retries on failure."""
