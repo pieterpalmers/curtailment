@@ -31,6 +31,7 @@ def _world(**overrides):
         growatt_pv_power=5000.0,
         battery_power=0.0,
         growatt_export_limit_active=False,
+        growatt_export_limit_pct=5,
         current_apsystems_pct=50,
         current_ev_mode="pv",
     )

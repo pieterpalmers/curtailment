@@ -1,8 +1,19 @@
 """Tests for evcc IO client."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from curtailment.io.evcc import EvccClient
+
+
+def _rates(value, field="rate"):
+    """evcc tariff response with one slot covering now."""
+    now = datetime.now(tz=timezone.utc)
+    return {"rates": [{
+        "start": (now - timedelta(minutes=15)).isoformat(),
+        "end": (now + timedelta(minutes=15)).isoformat(),
+        field: value,
+    }]}
 
 
 class TestEvccClient:
@@ -16,7 +27,7 @@ class TestEvccClient:
         client = self._make_client()
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"result": {"rate": -0.08}}
+        mock_resp.json.return_value = _rates(-0.08)
         client._client.get.return_value = mock_resp
         tariff = client.get_injection_tariff()
         assert tariff == -0.08
@@ -37,7 +48,7 @@ class TestEvccClient:
         client = self._make_client()
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"result": {"rate": 0.05}}
+        mock_resp.json.return_value = _rates(0.05)
         client._client.get.return_value = mock_resp
         tariff = client.get_consumption_tariff()
         assert tariff == 0.05
@@ -106,7 +117,7 @@ class TestEvccClient:
         )
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"result": {"rate": -0.05}}
+        mock_resp.json.return_value = _rates(-0.05)
         client._client.get.return_value = mock_resp
 
         # Test injection tariff uses configured path

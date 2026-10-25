@@ -118,7 +118,7 @@ def test_read_export_limit_status_disabled():
         client._client.read_holding_registers.side_effect = mock_read_holding
         status = client.read_export_limit_status()
         assert status.enabled is False
-        assert status.limit_pct is None
+        assert status.limit_pct == 0  # always read, even when disabled
 
 
 def test_disable_export_limit_writes_zero_to_30200():
