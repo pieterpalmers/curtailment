@@ -43,7 +43,8 @@ def main() -> None:
     setup_logging(cfg.logging.level, cfg.logging.format, cfg.logging.file)
 
     logger = logging.getLogger("curtailment.main")
-    logger.info("Starting solar curtailment daemon (dry_run=%s)", args.dry_run)
+    from .version import get_version
+    logger.info("Starting solar curtailment daemon %s (dry_run=%s)", get_version(), args.dry_run)
 
     # Validate config
     try:

@@ -223,3 +223,10 @@ def test_shutdown_cleanup_noop_when_idle():
     d._cleanup_on_shutdown()
     d.growatt.disable_export_limit.assert_not_called()
     d.apsystems.set_power_limit.assert_not_called()
+
+
+def test_version_from_git_checkout():
+    from curtailment.version import get_version
+
+    v = get_version()
+    assert v and v != "unknown"

@@ -10,6 +10,8 @@ import time
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
+from .version import get_version
+
 if TYPE_CHECKING:
     from .config import Config
     from .io.apsystems import APSystemsClient
@@ -113,6 +115,7 @@ class Daemon:
         with self._status_lock:
             last = self._last_cycle_at
             daemon = {
+                "version": get_version(),
                 "state": self._state.value if self._state else "none",
                 "time_in_state_s": round(time.monotonic() - self._state_start) if self._state_start else 0,
                 "uptime_s": round(now - self._started_at),

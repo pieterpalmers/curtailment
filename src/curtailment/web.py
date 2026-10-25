@@ -64,8 +64,10 @@ th.sec{{background:#eee}}
 table.sub td,table.sub th{{font-size:90%;padding:2px 6px}}
 .banner{{padding:8px 12px;margin-bottom:1em;background:#eef5ff;border-left:4px solid #48c}}
 .warn{{color:#b00;margin-top:4px}}
+.ver{{color:#777;margin-top:-0.5em}}
 </style></head><body>
 <h1>Curtailment daemon</h1>
+<p class="ver">{html.escape(str(status.get("daemon", {}).get("version", "")))}</p>
 {banner}
 <table>{''.join(rows)}</table>
 <p><a href="/status.json">status.json</a> &middot; auto-refresh 5s</p>
